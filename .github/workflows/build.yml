@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y tesseract-ocr
+          sudo apt-get install -y tesseract-ocr fuse libfuse2 wget
 
       - name: Install dependencies
         run: |
@@ -42,11 +42,91 @@ jobs:
       - name: Build application
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name Warranties garancije.py
 
+      - name: Build Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          mkdir -p packages
+          case "$GITHUB_REF_NAME" in
+            v*) VERSION="${GITHUB_REF_NAME#v}" ;;
+            *) VERSION="0.0.0-${GITHUB_RUN_NUMBER}" ;;
+          esac
+
+          tar -czf packages/Warranties-linux-x86_64.tar.gz -C dist Warranties
+
+          mkdir -p package/DEBIAN package/usr/bin package/usr/share/applications
+          cp dist/Warranties package/usr/bin/warranties
+          chmod +x package/usr/bin/warranties
+
+          cat > package/DEBIAN/control <<EOF
+          Package: warranties
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Danijel
+          Depends: tesseract-ocr
+          Description: Desktop warranty tracking tool
+          EOF
+          sed -i 's/^          //' package/DEBIAN/control
+
+          cat > package/usr/share/applications/warranties.desktop <<EOF
+          [Desktop Entry]
+          Name=Warranties
+          Exec=warranties
+          Terminal=false
+          Type=Application
+          Categories=Office;Utility;
+          EOF
+          sed -i 's/^          //' package/usr/share/applications/warranties.desktop
+
+          dpkg-deb --build package packages/warranties_${VERSION}_amd64.deb
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          set -e
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps packages
+          cp dist/Warranties AppDir/usr/bin/warranties
+          chmod +x AppDir/usr/bin/warranties
+
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/warranties" "$@"
+          EOF
+          sed -i 's/^          //' AppDir/AppRun
+          chmod +x AppDir/AppRun
+
+          cat > AppDir/warranties.desktop <<'EOF'
+          [Desktop Entry]
+          Name=Warranties
+          Exec=warranties
+          Icon=warranties
+          Terminal=false
+          Type=Application
+          Categories=Office;Utility;
+          EOF
+          sed -i 's/^          //' AppDir/warranties.desktop
+
+          cat > AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#7c2d12"/><path fill="#fff" d="M76 56h104v144H76z"/><path fill="#7c2d12" d="M96 84h64v14H96zm0 30h64v14H96zm0 30h42v14H96z"/></svg>
+          EOF
+          sed -i 's/^          //' AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg
+          cp AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg AppDir/warranties.svg
+
+          wget -O appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool.AppImage AppDir packages/Warranties-x86_64.AppImage
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Warranties-${{ runner.os }}
-          path: dist/*
+          path: |
+            dist/*
+            packages/*
 
   release:
     name: Publish GitHub release
