@@ -7,6 +7,12 @@ The app uses English as the default language. Croatian is available from the
 language selector in the top-right corner. The same area also contains the
 Light/Dark theme switch, and both settings are saved for the next launch.
 
+## Screenshot
+
+### Main window
+
+![Main window](docs/screenshots/main-window.png)
+
 ## Repository Contents
 
 - `garancije.py` - main application
