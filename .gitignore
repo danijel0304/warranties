@@ -1,5 +1,7 @@
 # Local data
 moje_garancije.csv
+garancije.db
+garancije.db-*
 Garancije.xlsx
 servisi_log.json
 postavke.json

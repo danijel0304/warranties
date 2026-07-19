@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 import csv
 import json
 import re
+import sqlite3
 from datetime import datetime
 import os
 import shutil
@@ -30,6 +31,7 @@ def odredi_baznu_mapu():
 
 
 BAZNA_MAPA = odredi_baznu_mapu()
+DATABASE_DATOTEKA = os.path.join(BAZNA_MAPA, "garancije.db")
 DATOTEKA = os.path.join(BAZNA_MAPA, "moje_garancije.csv")
 SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
@@ -37,6 +39,19 @@ BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
 POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
 
 STUPCI = ["ID", "Trgovina", "Broj Računa", "Naziv Proizvoda", "Šifra", "Cijena (€)", "Datum Kupovine", "Trajanje Garancije (god)", "Datum Isteka Garancije", "Originalni Račun", "Produljeno Jamstvo"]
+DB_STUPCI = [
+    "id",
+    "trgovina",
+    "broj_racuna",
+    "naziv_proizvoda",
+    "sifra",
+    "cijena",
+    "datum_kupovine",
+    "trajanje_garancije",
+    "datum_isteka",
+    "originalni_racun",
+    "produljeno_jamstvo",
+]
 
 JEZICI = {"en": "English", "hr": "Hrvatski"}
 JEZICI_PO_NAZIVU = {naziv: kod for kod, naziv in JEZICI.items()}
@@ -230,6 +245,7 @@ class GarancijeApp:
         self.servisi_podaci = {}
         self.povijest_brisanja = []
         self.trenutni_filter = "SVI"
+        self.db = None
 
         self.putanja_orig_racun = tk.StringVar()
         self.putanja_prod_jamstvo = tk.StringVar()
@@ -268,34 +284,174 @@ class GarancijeApp:
     def inicijaliziraj_sustav(self):
         for mapa in [BACKUP_MAPA, DOKUMENTI_MAPA]:
             if not os.path.exists(mapa): os.makedirs(mapa)
-        if os.path.exists(SERVISI_DATOTEKA):
-            try:
-                with open(SERVISI_DATOTEKA, 'r', encoding='utf-8') as f:
-                    self.servisi_podaci = json.load(f)
-            except: self.servisi_podaci = {}
+        self.inicijaliziraj_bazu()
+        self.migriraj_legacy_podatke()
+
+    def inicijaliziraj_bazu(self):
+        self.db = sqlite3.connect(DATABASE_DATOTEKA)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS garancije (
+                id TEXT PRIMARY KEY,
+                trgovina TEXT NOT NULL DEFAULT '',
+                broj_racuna TEXT NOT NULL DEFAULT '',
+                naziv_proizvoda TEXT NOT NULL DEFAULT '',
+                sifra TEXT NOT NULL DEFAULT '',
+                cijena TEXT NOT NULL DEFAULT '',
+                datum_kupovine TEXT NOT NULL DEFAULT '',
+                trajanje_garancije TEXT NOT NULL DEFAULT '',
+                datum_isteka TEXT NOT NULL DEFAULT '',
+                originalni_racun TEXT NOT NULL DEFAULT '',
+                produljeno_jamstvo TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS servisi (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                garancija_id TEXT NOT NULL,
+                datum TEXT NOT NULL DEFAULT '',
+                opis TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        self.db.commit()
+
+    def broj_redaka_u_bazi(self, tablica):
+        cur = self.db.execute(f"SELECT COUNT(*) FROM {tablica}")
+        return cur.fetchone()[0]
+
+    def dohvati_meta(self, kljuc):
+        cur = self.db.execute("SELECT value FROM meta WHERE key = ?", (kljuc,))
+        red = cur.fetchone()
+        return red[0] if red else ""
+
+    def postavi_meta(self, kljuc, vrijednost):
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (kljuc, vrijednost)
+            )
+
+    def normaliziraj_redak_podataka(self, red):
+        if len(red) == 12:
+            red = [red[0]] + red[2:]
+        elif len(red) == 10:
+            red = red[:-1] + ["", red[-1]]
+        elif len(red) < 10:
+            red = [str(uuid.uuid4())[:8]] + red[-9:]
+
+        red = list(red)
+        while len(red) < len(STUPCI):
+            red.append("")
+
+        red = ["" if vrijednost is None else str(vrijednost) for vrijednost in red[:len(STUPCI)]]
+        if not red[0]:
+            red[0] = str(uuid.uuid4())[:8]
+        if not red[8]:
+            red[8] = self.izracunaj_istek(red[6], red[7])
+        return red
+
+    def ucitaj_podatke_iz_csv_datoteke(self, putanja):
+        podaci = []
+        with open(putanja, mode='r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for red in reader:
+                if not red or len(red) < 4:
+                    continue
+                podaci.append(self.normaliziraj_redak_podataka(red))
+        return podaci
+
+    def migriraj_legacy_podatke(self):
+        if os.path.exists(DATOTEKA) and self.dohvati_meta("legacy_csv_migrated") != "1":
+            if self.broj_redaka_u_bazi("garancije") == 0:
+                self.svi_podaci = self.ucitaj_podatke_iz_csv_datoteke(DATOTEKA)
+                self.spremi_sve_u_bazu()
+            self.postavi_meta("legacy_csv_migrated", "1")
+
+        if os.path.exists(SERVISI_DATOTEKA) and self.dohvati_meta("legacy_services_migrated") != "1":
+            if self.broj_redaka_u_bazi("servisi") == 0:
+                self.servisi_podaci = self.ucitaj_servise_iz_json_datoteke(SERVISI_DATOTEKA)
+                self.spremi_sve_servise_u_bazu()
+            self.postavi_meta("legacy_services_migrated", "1")
 
     def automatski_lokalni_backup(self):
-        if os.path.exists(DATOTEKA):
+        if self.svi_podaci and os.path.exists(DATABASE_DATOTEKA):
             datum = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            shutil.copy2(DATOTEKA, os.path.join(BACKUP_MAPA, f"backup_{datum}.csv"))
+            self.napravi_backup_baze(os.path.join(BACKUP_MAPA, f"backup_{datum}.db"))
+            self.izvezi_podatke_u_csv(os.path.join(BACKUP_MAPA, f"backup_{datum}.csv"))
+
+    def napravi_backup_baze(self, putanja):
+        with sqlite3.connect(putanja) as backup_db:
+            self.db.backup(backup_db)
 
     def popravi_i_ucitaj_podatke(self):
-        self.svi_podaci = []
-        if os.path.exists(DATOTEKA):
-            with open(DATOTEKA, mode='r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                next(reader, None)
-                for red in reader:
-                    if not red or len(red) < 4: continue
-                    novi = red
-                    if len(red) == 12: novi = [red[0]] + red[2:]
-                    elif len(red) == 10: novi = red[:-1] + ["", red[-1]]
-                    elif len(red) < 10: novi = [str(uuid.uuid4())[:8]] + red[-9:]
-
-                    while len(novi) < len(STUPCI): novi.append("")
-                    self.svi_podaci.append(novi[:len(STUPCI)])
-        self.spremi_sve_u_csv()
+        self.svi_podaci = self.ucitaj_sve_iz_baze()
+        self.servisi_podaci = self.ucitaj_servise_iz_baze()
         self.osvjezi_tablicu_i_statistiku()
+
+    def ucitaj_sve_iz_baze(self):
+        cur = self.db.execute(f"SELECT {', '.join(DB_STUPCI)} FROM garancije ORDER BY rowid")
+        return [["" if vrijednost is None else str(vrijednost) for vrijednost in red] for red in cur.fetchall()]
+
+    def spremi_sve_u_bazu(self):
+        sada = datetime.now().isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("DELETE FROM garancije")
+            for red in self.svi_podaci:
+                red = self.normaliziraj_redak_podataka(red)
+                vrijednosti = red + [sada, sada]
+                self.db.execute(
+                    f"""
+                    INSERT OR REPLACE INTO garancije ({', '.join(DB_STUPCI)}, created_at, updated_at)
+                    VALUES ({', '.join(['?'] * (len(DB_STUPCI) + 2))})
+                    """,
+                    vrijednosti
+                )
+
+    def ucitaj_servise_iz_baze(self):
+        cur = self.db.execute("SELECT garancija_id, datum, opis FROM servisi ORDER BY id")
+        servisi = {}
+        for p_id, datum, opis in cur.fetchall():
+            servisi.setdefault(p_id, []).append({"datum": datum or "", "opis": opis or ""})
+        return servisi
+
+    def ucitaj_servise_iz_json_datoteke(self, putanja):
+        try:
+            with open(putanja, 'r', encoding='utf-8') as f:
+                podaci = json.load(f)
+            return podaci if isinstance(podaci, dict) else {}
+        except Exception:
+            return {}
+
+    def spremi_sve_servise_u_bazu(self):
+        sada = datetime.now().isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("DELETE FROM servisi")
+            for p_id, zapisi in self.servisi_podaci.items():
+                if not isinstance(zapisi, list):
+                    continue
+                for zapis in zapisi:
+                    if not isinstance(zapis, dict):
+                        continue
+                    self.db.execute(
+                        "INSERT INTO servisi (garancija_id, datum, opis, created_at) VALUES (?, ?, ?, ?)",
+                        (p_id, str(zapis.get("datum", "")), str(zapis.get("opis", "")), sada)
+                    )
+
+    def spremi_servis_u_bazu(self, p_id, zapis):
+        with self.db:
+            self.db.execute(
+                "INSERT INTO servisi (garancija_id, datum, opis, created_at) VALUES (?, ?, ?, ?)",
+                (p_id, zapis["datum"], zapis["opis"], datetime.now().isoformat(timespec="seconds"))
+            )
 
     def postavi_stilove(self):
         self.style = ttk.Style()
@@ -746,7 +902,7 @@ class GarancijeApp:
         if messagebox.askyesno(self.t("delete_title"), self.t("delete_expired_confirm", count=len(istekli))):
             self.povijest_brisanja.append(istekli)
             self.svi_podaci = [r for r in self.svi_podaci if not self.je_li_isteklo(r[8])]
-            self.spremi_sve_u_csv()
+            self.spremi_sve_u_bazu()
             self.osvjezi_tablicu_i_statistiku()
 
     def odaberi_doc(self, var):
@@ -768,7 +924,7 @@ class GarancijeApp:
                 v["Cijena (€)"], v["Datum Kupovine"], v["Trajanje Garancije (god)"], istek, final_orig, final_prod]
 
         self.svi_podaci.append(novi)
-        self.spremi_sve_u_csv()
+        self.spremi_sve_u_bazu()
         self.osvjezi_tablicu_i_statistiku()
         self.ocisti_unos()
 
@@ -901,17 +1057,13 @@ class GarancijeApp:
         servis_backup = os.path.join(mapa_uvoza, "servisi_log.json")
         if not os.path.isfile(servis_backup):
             return
-        try:
-            with open(servis_backup, 'r', encoding='utf-8') as f:
-                servisni_podaci = json.load(f)
-            if isinstance(servisni_podaci, dict):
-                for p_id, zapisi in servisni_podaci.items():
-                    if isinstance(zapisi, list):
-                        self.servisi_podaci[p_id] = zapisi
-                with open(SERVISI_DATOTEKA, 'w', encoding='utf-8') as f:
-                    json.dump(self.servisi_podaci, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        servisni_podaci = self.ucitaj_servise_iz_json_datoteke(servis_backup)
+        if not servisni_podaci:
+            return
+        for p_id, zapisi in servisni_podaci.items():
+            if isinstance(zapisi, list):
+                self.servisi_podaci[p_id] = zapisi
+        self.spremi_sve_servise_u_bazu()
 
     def puna_putanja_dokumenta(self, putanja):
         if not putanja:
@@ -1005,7 +1157,7 @@ class GarancijeApp:
             nova = self.kopiraj_datoteku(p, f"{prefiks}{p_id}")
             for r in self.svi_podaci:
                 if r[0] == p_id: r[idx] = nova
-            self.spremi_sve_u_csv()
+            self.spremi_sve_u_bazu()
             self.osvjezi_tablicu_i_statistiku()
 
     def obrisi_proizvod(self):
@@ -1016,14 +1168,14 @@ class GarancijeApp:
             if obrisani:
                 self.povijest_brisanja.append(obrisani)
                 self.svi_podaci = [r for r in self.svi_podaci if r[0] not in za_brisanje_id]
-                self.spremi_sve_u_csv()
+                self.spremi_sve_u_bazu()
                 self.osvjezi_tablicu_i_statistiku()
 
     def vrati_izbrisano(self):
         if not self.povijest_brisanja: return
         zadnje = self.povijest_brisanja.pop()
         self.svi_podaci.extend(zadnje)
-        self.spremi_sve_u_csv()
+        self.spremi_sve_u_bazu()
         self.osvjezi_tablicu_i_statistiku()
 
     def uredi_proizvod(self):
@@ -1045,7 +1197,7 @@ class GarancijeApp:
                 def spasi():
                     r[1:9] = [nove_v[s].get() for s in STUPCI[1:-2]]
                     r[8] = self.izracunaj_istek(r[6], r[7])
-                    self.spremi_sve_u_csv()
+                    self.spremi_sve_u_bazu()
                     self.osvjezi_tablicu_i_statistiku()
                     edit_win.destroy()
                 self.gumb(body, self.t("save"), spasi, "primary").pack(fill="x", pady=(18, 0))
@@ -1070,8 +1222,7 @@ class GarancijeApp:
                 z = {"datum": datetime.now().strftime("%d.%m.%Y"), "opis": en.get()}
                 self.servisi_podaci.setdefault(p_id, []).append(z)
                 lb.insert("end", f"[{z['datum']}] {z['opis']}")
-                with open(SERVISI_DATOTEKA, 'w', encoding='utf-8') as f:
-                    json.dump(self.servisi_podaci, f, ensure_ascii=False, indent=2)
+                self.spremi_servis_u_bazu(p_id, z)
                 en.delete(0, 'end')
         self.gumb(body, self.t("add_service"), dodaj, "primary").pack(fill="x")
 
@@ -1119,7 +1270,7 @@ class GarancijeApp:
                 dokumenti_nedostaju += nedostaje
 
             self.uvezi_servise_iz_backupa(mapa_uvoza)
-            self.spremi_sve_u_csv()
+            self.spremi_sve_u_bazu()
             self.osvjezi_tablicu_i_statistiku()
             messagebox.showinfo(
                 self.t("import_title"),
@@ -1136,10 +1287,10 @@ class GarancijeApp:
             backup_dir = os.path.join(target, f"Garancije_Backup_{datum}")
             os.makedirs(backup_dir)
 
-            if os.path.exists(DATOTEKA):
-                shutil.copy2(DATOTEKA, backup_dir)
-            if os.path.exists(SERVISI_DATOTEKA):
-                shutil.copy2(SERVISI_DATOTEKA, backup_dir)
+            if os.path.exists(DATABASE_DATOTEKA):
+                self.napravi_backup_baze(os.path.join(backup_dir, "garancije.db"))
+            self.izvezi_podatke_u_csv(os.path.join(backup_dir, "moje_garancije.csv"))
+            self.izvezi_servise_u_json(os.path.join(backup_dir, "servisi_log.json"))
             if os.path.exists(DOKUMENTI_MAPA):
                 self.kopiraj_mapu_dokumenata(backup_dir)
 
@@ -1147,9 +1298,13 @@ class GarancijeApp:
         except Exception as e:
             messagebox.showerror(self.t("error_title"), self.t("backup_error", error=e))
 
-    def spremi_sve_u_csv(self):
-        with open(DATOTEKA, mode='w', newline='', encoding='utf-8') as f:
+    def izvezi_podatke_u_csv(self, putanja):
+        with open(putanja, mode='w', newline='', encoding='utf-8') as f:
             w = csv.writer(f); w.writerow(STUPCI); w.writerows(self.svi_podaci)
+
+    def izvezi_servise_u_json(self, putanja):
+        with open(putanja, 'w', encoding='utf-8') as f:
+            json.dump(self.servisi_podaci, f, ensure_ascii=False, indent=2)
 
     def izracunaj_istek(self, d, t):
         try:

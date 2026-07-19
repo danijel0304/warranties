@@ -28,11 +28,12 @@ source, it uses or creates these files next to `garancije.py`. Packaged builds
 use a writable folder next to the executable when possible, or
 `Documents/Garancije` if the install folder is not writable:
 
-- `moje_garancije.csv` - active local database
-- `Garancije.xlsx` - local Excel file used with the records
+- `garancije.db` - active local SQLite database
+- `moje_garancije.csv` - legacy/import-export CSV copy
+- `Garancije.xlsx` - Excel file used for import/export
 - `dokumenti_garancija/` - saved receipts and warranty documents
-- `backup/` - automatic CSV backups
-- `servisi_log.json` - service history, created after the first service note
+- `backup/` - automatic SQLite and CSV backups
+- `servisi_log.json` - legacy/import-export service history copy
 - `postavke.json` - local language and theme settings
 
 ## Running
@@ -94,21 +95,26 @@ must be installed through the operating system package manager.
 
 ## Data And Backups
 
-On each launch, the app copies the existing `moje_garancije.csv` file into the
-`backup/` folder. The **Backup** button creates an additional backup of the CSV
-database, service records, and attached documents in a folder selected by the
-user. Excel export also copies `dokumenti_garancija/` next to the exported
-`.xlsx` file, so importing that file later can restore the attached documents.
+On each launch, the app copies the existing `garancije.db` SQLite database into
+the `backup/` folder and also writes a CSV snapshot. The **Backup** button
+creates an additional backup of the SQLite database, CSV snapshot, service JSON
+snapshot, and attached documents in a folder selected by the user. Excel export
+also copies `dokumenti_garancija/` next to the exported `.xlsx` file, so
+importing that file later can restore the attached documents.
 
-Before manually editing or replacing the CSV file, close the app and back up
-the whole local project folder.
+If an older `moje_garancije.csv` or `servisi_log.json` file already exists, it
+is migrated automatically into `garancije.db` on first launch.
+
+Before manually replacing the database or document folder, close the app and
+back up the whole local data folder.
 
 ## Notes
 
 - Only the product name is required.
 - Dates are entered as `DD.MM.YYYY`.
 - Warranty duration is entered as a whole number of years.
-- Excel import and export use `pandas` and `openpyxl`.
+- The main database is SQLite. Excel/CSV import and export use `pandas` and
+  `openpyxl`.
 - Deleted records can be restored only during the current app session.
 
 ---
@@ -137,11 +143,12 @@ izvornog koda, koristi ih ili stvara uz `garancije.py`. Gotovi paketi koriste
 upisivu mapu uz izvršnu datoteku kad je to moguće, ili `Documents/Garancije` ako
 instalacijska mapa nije upisiva:
 
-- `moje_garancije.csv` - aktivna lokalna baza podataka
-- `Garancije.xlsx` - lokalna Excel datoteka povezana s evidencijom
+- `garancije.db` - aktivna lokalna SQLite baza podataka
+- `moje_garancije.csv` - stara/import-export CSV kopija
+- `Garancije.xlsx` - Excel datoteka za uvoz/izvoz
 - `dokumenti_garancija/` - spremljeni računi i dokumenti jamstva
-- `backup/` - automatske sigurnosne kopije CSV baze
-- `servisi_log.json` - povijest servisa; stvara se nakon prvog servisnog zapisa
+- `backup/` - automatske sigurnosne kopije SQLite baze i CSV snapshota
+- `servisi_log.json` - stara/import-export kopija servisnih zapisa
 - `postavke.json` - lokalni odabir jezika i teme
 
 ## Pokretanje
@@ -202,19 +209,24 @@ instalirati kroz upravitelj paketa operacijskog sustava.
 
 ## Podaci I Sigurnosne Kopije
 
-Pri svakom pokretanju program kopira postojeći `moje_garancije.csv` u mapu
-`backup/`. Gumb **Backup** izrađuje dodatnu kopiju CSV baze, servisnih zapisa i
-priloženih dokumenata u mapu koju korisnik odabere. Excel izvoz također kopira
+Pri svakom pokretanju program kopira postojeću SQLite bazu `garancije.db` u
+mapu `backup/` i uz nju zapisuje CSV snapshot. Gumb **Backup** izrađuje dodatnu
+kopiju SQLite baze, CSV snapshota, JSON snapshota servisnih zapisa i priloženih
+dokumenata u mapu koju korisnik odabere. Excel izvoz također kopira
 `dokumenti_garancija/` uz izvezenu `.xlsx` datoteku, kako bi kasniji uvoz mogao
 vratiti priložene račune i jamstva.
 
-Prije ručnog uređivanja ili zamjene CSV datoteke preporučuje se zatvoriti
-program i napraviti sigurnosnu kopiju cijele lokalne mape projekta.
+Ako već postoji stari `moje_garancije.csv` ili `servisi_log.json`, program ih
+pri prvom pokretanju automatski prebacuje u `garancije.db`.
+
+Prije ručne zamjene baze ili mape s dokumentima preporučuje se zatvoriti
+program i napraviti sigurnosnu kopiju cijele lokalne mape s podacima.
 
 ## Napomene
 
 - Obavezan je samo naziv proizvoda.
 - Datumi se unose u obliku `DD.MM.GGGG`.
 - Trajanje garancije unosi se kao cijeli broj godina.
-- Excel uvoz i izvoz koristi pakete `pandas` i `openpyxl`.
+- Glavna baza je SQLite. Excel/CSV uvoz i izvoz koriste pakete `pandas` i
+  `openpyxl`.
 - Brisanje je moguće poništiti samo tijekom trenutačnog pokretanja programa.
