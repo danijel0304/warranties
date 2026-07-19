@@ -23,8 +23,10 @@ Light/Dark theme switch, and both settings are saved for the next launch.
 - `.gitignore` - prevents local data, receipts, backups, and settings from
   being committed
 
-Local user data is not part of the repository. The app uses or creates these
-files next to `garancije.py`:
+Local user data is not part of the repository. When the app is started from
+source, it uses or creates these files next to `garancije.py`. Packaged builds
+use a writable folder next to the executable when possible, or
+`Documents/Garancije` if the install folder is not writable:
 
 - `moje_garancije.csv` - active local database
 - `Garancije.xlsx` - local Excel file used with the records
@@ -95,7 +97,8 @@ must be installed through the operating system package manager.
 On each launch, the app copies the existing `moje_garancije.csv` file into the
 `backup/` folder. The **Backup** button creates an additional backup of the CSV
 database, service records, and attached documents in a folder selected by the
-user.
+user. Excel export also copies `dokumenti_garancija/` next to the exported
+`.xlsx` file, so importing that file later can restore the attached documents.
 
 Before manually editing or replacing the CSV file, close the app and back up
 the whole local project folder.
@@ -129,8 +132,10 @@ postavke spremaju se za sljedeće pokretanje.
 - `.gitignore` - sprječava slanje lokalnih podataka, računa, sigurnosnih kopija
   i postavki u Git
 
-Lokalni korisnički podaci nisu dio repozitorija. Program ih koristi ili stvara
-uz `garancije.py`:
+Lokalni korisnički podaci nisu dio repozitorija. Kad se program pokreće iz
+izvornog koda, koristi ih ili stvara uz `garancije.py`. Gotovi paketi koriste
+upisivu mapu uz izvršnu datoteku kad je to moguće, ili `Documents/Garancije` ako
+instalacijska mapa nije upisiva:
 
 - `moje_garancije.csv` - aktivna lokalna baza podataka
 - `Garancije.xlsx` - lokalna Excel datoteka povezana s evidencijom
@@ -199,7 +204,9 @@ instalirati kroz upravitelj paketa operacijskog sustava.
 
 Pri svakom pokretanju program kopira postojeći `moje_garancije.csv` u mapu
 `backup/`. Gumb **Backup** izrađuje dodatnu kopiju CSV baze, servisnih zapisa i
-priloženih dokumenata u mapu koju korisnik odabere.
+priloženih dokumenata u mapu koju korisnik odabere. Excel izvoz također kopira
+`dokumenti_garancija/` uz izvezenu `.xlsx` datoteku, kako bi kasniji uvoz mogao
+vratiti priložene račune i jamstva.
 
 Prije ručnog uređivanja ili zamjene CSV datoteke preporučuje se zatvoriti
 program i napraviti sigurnosnu kopiju cijele lokalne mape projekta.

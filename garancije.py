@@ -9,10 +9,27 @@ import shutil
 import uuid
 import platform
 import subprocess
+import sys
 import pandas as pd
 
 # --- KONFIGURACIJA ---
-BAZNA_MAPA = os.path.dirname(os.path.abspath(__file__))
+
+def odredi_baznu_mapu():
+    if not getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(__file__))
+
+    izvrsna_mapa = os.path.dirname(os.path.abspath(sys.executable))
+    if os.access(izvrsna_mapa, os.W_OK):
+        return izvrsna_mapa
+
+    dokumenti = os.path.join(os.path.expanduser("~"), "Documents")
+    if os.path.isdir(dokumenti):
+        return os.path.join(dokumenti, "Garancije")
+
+    return os.path.join(os.path.expanduser("~"), "Garancije")
+
+
+BAZNA_MAPA = odredi_baznu_mapu()
 DATOTEKA = os.path.join(BAZNA_MAPA, "moje_garancije.csv")
 SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
@@ -81,8 +98,11 @@ PRIJEVODI = {
         "service_title": "Povijest servisa",
         "recorded_repairs": "Zabilježeni popravci",
         "add_service": "Dodaj zapis",
+        "import_title": "Uvoz",
+        "import_success": "Uvoz završen.\nDodano/ažurirano zapisa: {records}\nDokumenata vraćeno: {docs}\nDokumenata nije pronađeno: {missing}",
         "export_title": "Izvoz",
         "export_success": "Uspješno izvezeno u Excel.",
+        "export_success_with_docs": "Uspješno izvezeno u Excel.\nDokumenti su kopirani u:\n{path}",
         "filetype_excel": "Excel",
         "filetype_excel_csv": "Excel/CSV",
         "error_title": "Greška",
@@ -162,8 +182,11 @@ PRIJEVODI = {
         "service_title": "Service history",
         "recorded_repairs": "Recorded repairs",
         "add_service": "Add note",
+        "import_title": "Import",
+        "import_success": "Import finished.\nAdded/updated records: {records}\nDocuments restored: {docs}\nDocuments not found: {missing}",
         "export_title": "Export",
         "export_success": "Successfully exported to Excel.",
+        "export_success_with_docs": "Successfully exported to Excel.\nDocuments were copied to:\n{path}",
         "filetype_excel": "Excel",
         "filetype_excel_csv": "Excel/CSV",
         "error_title": "Error",
@@ -755,6 +778,141 @@ class GarancijeApp:
         shutil.copy2(putanja, nova)
         return os.path.relpath(nova, BAZNA_MAPA)
 
+    def kopiraj_mapu_dokumenata(self, ciljna_mapa):
+        if not os.path.isdir(DOKUMENTI_MAPA):
+            return ""
+
+        cilj = os.path.join(ciljna_mapa, "dokumenti_garancija")
+        if os.path.abspath(cilj) != os.path.abspath(DOKUMENTI_MAPA):
+            shutil.copytree(DOKUMENTI_MAPA, cilj, dirs_exist_ok=True)
+        return cilj
+
+    def ocisti_import_vrijednost(self, vrijednost):
+        if vrijednost is None:
+            return ""
+        try:
+            if pd.isna(vrijednost):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        if isinstance(vrijednost, datetime):
+            return vrijednost.strftime("%d.%m.%Y")
+        if isinstance(vrijednost, float) and vrijednost.is_integer():
+            return str(int(vrijednost))
+        tekst = str(vrijednost).strip()
+        return "" if tekst.lower() in ("nan", "nat", "none") else tekst
+
+    def normaliziraj_import_putanju(self, putanja):
+        putanja = self.ocisti_import_vrijednost(putanja)
+        if not putanja:
+            return ""
+        if os.path.isabs(putanja):
+            return putanja
+        return os.path.normpath(putanja.replace("\\", os.sep).replace("/", os.sep))
+
+    def naziv_datoteke_iz_putanje(self, putanja):
+        return os.path.basename(str(putanja).replace("\\", "/"))
+
+    def kandidati_za_import_dokument(self, spremljena_putanja, mapa_uvoza):
+        putanja = self.normaliziraj_import_putanju(spremljena_putanja)
+        if not putanja:
+            return []
+
+        kandidati = []
+        if os.path.isabs(putanja):
+            kandidati.append(putanja)
+        else:
+            kandidati.extend([
+                os.path.join(mapa_uvoza, putanja),
+                os.path.join(BAZNA_MAPA, putanja),
+            ])
+
+        naziv = self.naziv_datoteke_iz_putanje(putanja)
+        if naziv:
+            kandidati.extend([
+                os.path.join(mapa_uvoza, "dokumenti_garancija", naziv),
+                os.path.join(DOKUMENTI_MAPA, naziv),
+            ])
+
+        jedinstveni = []
+        vidjeni = set()
+        for kandidat in kandidati:
+            aps = os.path.abspath(kandidat)
+            if aps not in vidjeni:
+                vidjeni.add(aps)
+                jedinstveni.append(kandidat)
+        return jedinstveni
+
+    def pronadi_import_dokument(self, spremljena_putanja, mapa_uvoza):
+        for kandidat in self.kandidati_za_import_dokument(spremljena_putanja, mapa_uvoza):
+            if os.path.isfile(kandidat):
+                return kandidat
+        return ""
+
+    def uvezi_dokument_iz_backupa(self, spremljena_putanja, mapa_uvoza, p_id, prefiks):
+        putanja = self.normaliziraj_import_putanju(spremljena_putanja)
+        if not putanja:
+            return "", False, False
+
+        izvor = self.pronadi_import_dokument(putanja, mapa_uvoza)
+        if not izvor:
+            return putanja, False, True
+
+        ekstenzija = os.path.splitext(izvor)[1] or os.path.splitext(putanja)[1]
+        odrediste = os.path.join(DOKUMENTI_MAPA, f"{prefiks}_{p_id}{ekstenzija}")
+        os.makedirs(DOKUMENTI_MAPA, exist_ok=True)
+        if os.path.abspath(izvor) != os.path.abspath(odrediste):
+            shutil.copy2(izvor, odrediste)
+        return os.path.relpath(odrediste, BAZNA_MAPA), True, False
+
+    def redak_iz_importa(self, red, mapa_uvoza):
+        vrijednosti = {stupac: self.ocisti_import_vrijednost(red.get(stupac, "")) for stupac in STUPCI}
+        p_id = vrijednosti["ID"] or str(uuid.uuid4())[:8]
+
+        racun, racun_vracen, racun_nedostaje = self.uvezi_dokument_iz_backupa(
+            vrijednosti["Originalni Račun"], mapa_uvoza, p_id, "Racun"
+        )
+        jamstvo, jamstvo_vraceno, jamstvo_nedostaje = self.uvezi_dokument_iz_backupa(
+            vrijednosti["Produljeno Jamstvo"], mapa_uvoza, p_id, "Jamstvo"
+        )
+
+        istek = vrijednosti["Datum Isteka Garancije"]
+        if not istek:
+            istek = self.izracunaj_istek(vrijednosti["Datum Kupovine"], vrijednosti["Trajanje Garancije (god)"])
+
+        novi = [
+            p_id,
+            vrijednosti["Trgovina"],
+            vrijednosti["Broj Računa"],
+            vrijednosti["Naziv Proizvoda"],
+            vrijednosti["Šifra"],
+            vrijednosti["Cijena (€)"],
+            vrijednosti["Datum Kupovine"],
+            vrijednosti["Trajanje Garancije (god)"],
+            istek,
+            racun,
+            jamstvo,
+        ]
+        vraceno = int(racun_vracen) + int(jamstvo_vraceno)
+        nedostaje = int(racun_nedostaje) + int(jamstvo_nedostaje)
+        return novi, vraceno, nedostaje
+
+    def uvezi_servise_iz_backupa(self, mapa_uvoza):
+        servis_backup = os.path.join(mapa_uvoza, "servisi_log.json")
+        if not os.path.isfile(servis_backup):
+            return
+        try:
+            with open(servis_backup, 'r', encoding='utf-8') as f:
+                servisni_podaci = json.load(f)
+            if isinstance(servisni_podaci, dict):
+                for p_id, zapisi in servisni_podaci.items():
+                    if isinstance(zapisi, list):
+                        self.servisi_podaci[p_id] = zapisi
+                with open(SERVISI_DATOTEKA, 'w', encoding='utf-8') as f:
+                    json.dump(self.servisi_podaci, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def puna_putanja_dokumenta(self, putanja):
         if not putanja:
             return ""
@@ -922,21 +1080,51 @@ class GarancijeApp:
         putanja = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[(self.t("filetype_excel"), "*.xlsx")], initialfile="Garancije_Eksport.xlsx")
         if putanja:
             pd.DataFrame(self.svi_podaci, columns=STUPCI).to_excel(putanja, index=False)
-            messagebox.showinfo(self.t("export_title"), self.t("export_success"))
+            dokumenti_backup = self.kopiraj_mapu_dokumenata(os.path.dirname(putanja))
+            if dokumenti_backup:
+                messagebox.showinfo(self.t("export_title"), self.t("export_success_with_docs", path=dokumenti_backup))
+            else:
+                messagebox.showinfo(self.t("export_title"), self.t("export_success"))
 
     def uvezi_iz_excela(self):
         p = filedialog.askopenfilename(filetypes=[(self.t("filetype_excel_csv"), "*.xlsx *.csv")])
         if not p: return
         try:
-            df = pd.read_excel(p) if p.endswith('.xlsx') else pd.read_csv(p)
+            df = pd.read_excel(p) if p.lower().endswith('.xlsx') else pd.read_csv(p)
+            mapa_uvoza = os.path.dirname(os.path.abspath(p))
+            indeks_po_id = {r[0]: i for i, r in enumerate(self.svi_podaci) if r[0]}
+            broj_zapisa = 0
+            vraceni_dokumenti = 0
+            dokumenti_nedostaju = 0
+
             for _, red in df.iterrows():
-                novi = [str(uuid.uuid4())[:8], str(red.get('Trgovina','')), str(red.get('Broj Računa','')),
-                        str(red.get('Naziv Proizvoda','')), str(red.get('Šifra','')), str(red.get('Cijena (€)','')),
-                        str(red.get('Datum Kupovine','')), str(red.get('Trajanje Garancije (god)','')),
-                        str(red.get('Datum Isteka Garancije','')), "", ""]
-                self.svi_podaci.append(novi)
+                novi, vraceno, nedostaje = self.redak_iz_importa(red, mapa_uvoza)
+                if not any(novi[i] for i in [1, 2, 3, 4, 5, 6, 7, 9, 10]):
+                    continue
+
+                postojeci_idx = indeks_po_id.get(novi[0])
+                if postojeci_idx is None:
+                    indeks_po_id[novi[0]] = len(self.svi_podaci)
+                    self.svi_podaci.append(novi)
+                else:
+                    stari = self.svi_podaci[postojeci_idx]
+                    if not novi[9] and stari[9]:
+                        novi[9] = stari[9]
+                    if not novi[10] and stari[10]:
+                        novi[10] = stari[10]
+                    self.svi_podaci[postojeci_idx] = novi
+
+                broj_zapisa += 1
+                vraceni_dokumenti += vraceno
+                dokumenti_nedostaju += nedostaje
+
+            self.uvezi_servise_iz_backupa(mapa_uvoza)
             self.spremi_sve_u_csv()
             self.osvjezi_tablicu_i_statistiku()
+            messagebox.showinfo(
+                self.t("import_title"),
+                self.t("import_success", records=broj_zapisa, docs=vraceni_dokumenti, missing=dokumenti_nedostaju)
+            )
         except Exception as e: messagebox.showerror(self.t("error_title"), str(e))
 
     def napravi_rucni_backup(self):
@@ -953,7 +1141,7 @@ class GarancijeApp:
             if os.path.exists(SERVISI_DATOTEKA):
                 shutil.copy2(SERVISI_DATOTEKA, backup_dir)
             if os.path.exists(DOKUMENTI_MAPA):
-                shutil.copytree(DOKUMENTI_MAPA, os.path.join(backup_dir, "dokumenti_garancija"), dirs_exist_ok=True)
+                self.kopiraj_mapu_dokumenata(backup_dir)
 
             messagebox.showinfo(self.t("backup_success_title"), self.t("backup_success", path=backup_dir))
         except Exception as e:
