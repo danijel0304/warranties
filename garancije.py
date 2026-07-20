@@ -5,6 +5,10 @@ import csv
 import json
 import re
 import sqlite3
+import threading
+import urllib.error
+import urllib.request
+import webbrowser
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import os
@@ -39,6 +43,10 @@ SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
 BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
 POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
+APP_VERSION = "1.1.2"
+GITHUB_REPO = "danijel0304/warranties"
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
 STUPCI = ["ID", "Trgovina", "Broj Računa", "Naziv Proizvoda", "Šifra", "Cijena (€)", "Datum Kupovine", "Trajanje Garancije (god)", "Datum Isteka Garancije", "Originalni Račun", "Produljeno Jamstvo"]
 DB_STUPCI = [
@@ -130,6 +138,8 @@ PRIJEVODI = {
         "backup_success_title": "Uspjeh",
         "backup_success": "Sigurnosna kopija svih podataka uspješno je spremljena u:\n{path}",
         "backup_error": "Došlo je do greške prilikom izrade sigurnosne kopije:\n{error}",
+        "update_available_title": "Dostupna je nova verzija",
+        "update_available_msg": "Dostupna je nova verzija programa Garancije.\n\nTrenutna verzija: {current}\nNova verzija: {latest}\n\nŽelite li otvoriti stranicu za preuzimanje?",
         "doc_receipt": "RAČUN",
         "doc_warranty": "JAMSTVO",
         "columns": {
@@ -217,6 +227,8 @@ PRIJEVODI = {
         "backup_success_title": "Success",
         "backup_success": "All data was backed up successfully to:\n{path}",
         "backup_error": "An error occurred while creating the backup:\n{error}",
+        "update_available_title": "Update available",
+        "update_available_msg": "A new version of Warranties is available.\n\nCurrent version: {current}\nNew version: {latest}\n\nDo you want to open the download page?",
         "doc_receipt": "RECEIPT",
         "doc_warranty": "WARRANTY",
         "columns": {
@@ -265,6 +277,7 @@ class GarancijeApp:
         self.db = None
         self.skalabilni_gumbi = []
         self._zadnja_ui_skala = None
+        self.update_provjera_u_tijeku = False
 
         self.putanja_orig_racun = tk.StringVar()
         self.putanja_prod_jamstvo = tk.StringVar()
@@ -275,6 +288,7 @@ class GarancijeApp:
         self.kreiraj_sucelje()
         self.popravi_i_ucitaj_podatke()
         self.automatski_lokalni_backup()
+        self.root.after(1500, self.provjeri_update_u_pozadini)
 
     def ucitaj_postavke(self):
         if not os.path.exists(POSTAVKE_DATOTEKA):
@@ -286,7 +300,9 @@ class GarancijeApp:
             return {}
 
     def spremi_postavke(self):
-        postavke = {"jezik": self.jezik, "tema": self.tema, "dark_mode": self.dark_mode}
+        postavke = dict(self.postavke)
+        postavke.update({"jezik": self.jezik, "tema": self.tema, "dark_mode": self.dark_mode})
+        self.postavke = postavke
         with open(POSTAVKE_DATOTEKA, 'w', encoding='utf-8') as f:
             json.dump(postavke, f, ensure_ascii=False, indent=2)
 
@@ -350,6 +366,74 @@ class GarancijeApp:
 
     def formatiraj_cijenu_unosa(self, var):
         var.set(self.normaliziraj_cijenu(var.get()))
+
+    def dijelovi_verzije(self, verzija):
+        tekst = str(verzija or "").strip()
+        if tekst.lower().startswith("v"):
+            tekst = tekst[1:]
+        dijelovi = [int(dio) for dio in re.findall(r"\d+", tekst)[:3]]
+        while len(dijelovi) < 3:
+            dijelovi.append(0)
+        return tuple(dijelovi)
+
+    def je_novija_verzija(self, najnovija, trenutna):
+        if not najnovija:
+            return False
+        return self.dijelovi_verzije(najnovija) > self.dijelovi_verzije(trenutna)
+
+    def dohvati_zadnji_github_release(self):
+        zahtjev = urllib.request.Request(
+            GITHUB_RELEASES_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": f"Warranties/{APP_VERSION}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(zahtjev, timeout=8) as odgovor:
+                podaci = json.loads(odgovor.read().decode("utf-8"))
+        except (OSError, TimeoutError, urllib.error.URLError, ValueError):
+            return None
+
+        tag = str(podaci.get("tag_name", "")).strip()
+        if not tag or podaci.get("draft") or podaci.get("prerelease"):
+            return None
+        return {"tag": tag, "url": podaci.get("html_url") or GITHUB_RELEASES_URL}
+
+    def provjeri_update_u_pozadini(self):
+        if self.update_provjera_u_tijeku:
+            return
+        self.update_provjera_u_tijeku = True
+
+        def posao():
+            release = self.dohvati_zadnji_github_release()
+            try:
+                self.root.after(0, lambda: self.obradi_pronadeni_update(release))
+            except (tk.TclError, RuntimeError):
+                pass
+
+        threading.Thread(target=posao, daemon=True).start()
+
+    def obradi_pronadeni_update(self, release):
+        self.update_provjera_u_tijeku = False
+        if not release:
+            return
+
+        latest_tag = release["tag"]
+        if not self.je_novija_verzija(latest_tag, APP_VERSION):
+            return
+        if self.postavke.get("ignorirani_update") == latest_tag:
+            return
+
+        otvori = messagebox.askyesno(
+            self.t("update_available_title"),
+            self.t("update_available_msg", current=APP_VERSION, latest=latest_tag),
+        )
+        if otvori:
+            webbrowser.open(release["url"], new=2)
+        else:
+            self.postavke["ignorirani_update"] = latest_tag
+            self.spremi_postavke()
 
     def inicijaliziraj_sustav(self):
         for mapa in [BACKUP_MAPA, DOKUMENTI_MAPA]:

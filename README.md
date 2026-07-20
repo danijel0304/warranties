@@ -83,6 +83,12 @@ Available options:
 The language and theme are saved in `postavke.json`, which is created
 automatically after changing settings.
 
+## Updates
+
+After startup, the app checks the latest GitHub release in the background. If a
+newer version is available, it asks whether to open the download page. If the
+user declines, the same release is not shown again.
+
 ## Receipt OCR Optional
 
 To read text from receipt images, you need:
@@ -197,6 +203,12 @@ U programu su dostupni:
 
 Odabir jezika i teme sprema se u `postavke.json`, koja se automatski stvara
 nakon promjene postavki.
+
+## Ažuriranja
+
+Nakon pokretanja program u pozadini provjerava zadnji GitHub release. Ako je
+dostupna novija verzija, pita korisnika želi li otvoriti stranicu za
+preuzimanje. Ako korisnik odbije, ista verzija se više ne nudi.
 
 ## OCR Računa Neobavezno
 
