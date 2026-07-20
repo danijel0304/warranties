@@ -111,7 +111,8 @@ back up the whole local data folder.
 ## Notes
 
 - Only the product name is required.
-- Dates are entered as `DD.MM.YYYY`.
+- Prices are automatically formatted with two decimals.
+- Dates can be selected from the calendar or entered as `DD.MM.YYYY`.
 - Warranty duration is entered as a whole number of years.
 - The main database is SQLite. Excel/CSV import and export use `pandas` and
   `openpyxl`.
@@ -225,7 +226,8 @@ program i napraviti sigurnosnu kopiju cijele lokalne mape s podacima.
 ## Napomene
 
 - Obavezan je samo naziv proizvoda.
-- Datumi se unose u obliku `DD.MM.GGGG`.
+- Cijene se automatski formatiraju na dvije decimale.
+- Datumi se mogu odabrati iz kalendara ili unijeti u obliku `DD.MM.GGGG`.
 - Trajanje garancije unosi se kao cijeli broj godina.
 - Glavna baza je SQLite. Excel/CSV uvoz i izvoz koriste pakete `pandas` i
   `openpyxl`.

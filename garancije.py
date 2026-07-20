@@ -1,10 +1,12 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import calendar
 import csv
 import json
 import re
 import sqlite3
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import os
 import shutil
 import uuid
@@ -94,6 +96,9 @@ PRIJEVODI = {
         "ocr_detected_label": "Automatski prepoznati podaci:",
         "date": "Datum",
         "amount": "Iznos (€)",
+        "calendar_button": "Kalendar",
+        "calendar_title": "Odaberi datum",
+        "today": "Danas",
         "keep_ocr_data": "Zadrži ove podatke",
         "transferred_title": "Prebačeno",
         "transferred_msg": "Dopunite naziv proizvoda i trgovinu, zatim spremite unos.",
@@ -178,6 +183,9 @@ PRIJEVODI = {
         "ocr_detected_label": "Automatically detected data:",
         "date": "Date",
         "amount": "Amount (€)",
+        "calendar_button": "Calendar",
+        "calendar_title": "Choose date",
+        "today": "Today",
         "keep_ocr_data": "Keep these values",
         "transferred_title": "Transferred",
         "transferred_msg": "Fill in the product name and store, then save the entry.",
@@ -227,11 +235,20 @@ PRIJEVODI = {
     },
 }
 
+NAZIVI_MJESECI = {
+    "hr": ["", "Siječanj", "Veljača", "Ožujak", "Travanj", "Svibanj", "Lipanj", "Srpanj", "Kolovoz", "Rujan", "Listopad", "Studeni", "Prosinac"],
+    "en": ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+}
+DANI_U_TJEDNU = {
+    "hr": ["Pon", "Uto", "Sri", "Čet", "Pet", "Sub", "Ned"],
+    "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+}
+
 class GarancijeApp:
     def __init__(self, root):
         self.root = root
-        self.root.geometry("1500x850")
-        self.root.minsize(1180, 720)
+        self.root.geometry("1280x780")
+        self.root.minsize(900, 600)
 
         self.postavke = self.ucitaj_postavke()
         self.jezik = self.postavke.get("jezik", "en")
@@ -246,6 +263,8 @@ class GarancijeApp:
         self.povijest_brisanja = []
         self.trenutni_filter = "SVI"
         self.db = None
+        self.skalabilni_gumbi = []
+        self._zadnja_ui_skala = None
 
         self.putanja_orig_racun = tk.StringVar()
         self.putanja_prod_jamstvo = tk.StringVar()
@@ -280,6 +299,57 @@ class GarancijeApp:
 
     def naziv_trenutne_teme(self):
         return self.t("theme_dark") if self.dark_mode else self.t("theme_light")
+
+    def normaliziraj_cijenu(self, vrijednost):
+        tekst = "" if vrijednost is None else str(vrijednost).strip()
+        if not tekst:
+            return ""
+
+        ocisceno = tekst.replace("€", "").replace("EUR", "").replace("eur", "")
+        ocisceno = re.sub(r"\s+", "", ocisceno)
+        ocisceno = re.sub(r"[^0-9,.\-]", "", ocisceno)
+        if not re.search(r"\d", ocisceno):
+            return tekst
+
+        if "," in ocisceno and "." in ocisceno:
+            decimalni_separator = "," if ocisceno.rfind(",") > ocisceno.rfind(".") else "."
+            separator_tisuca = "." if decimalni_separator == "," else ","
+            broj = ocisceno.replace(separator_tisuca, "").replace(decimalni_separator, ".")
+        elif "," in ocisceno:
+            broj = self.normaliziraj_jedan_separator(ocisceno, ",")
+        elif "." in ocisceno:
+            broj = self.normaliziraj_jedan_separator(ocisceno, ".")
+        else:
+            broj = ocisceno
+
+        try:
+            iznos = Decimal(broj).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except InvalidOperation:
+            return tekst
+        return f"{iznos:.2f}".replace(".", ",")
+
+    def normaliziraj_jedan_separator(self, tekst, separator):
+        dijelovi = tekst.split(separator)
+        if len(dijelovi) == 2:
+            lijevo, desno = dijelovi
+            if len(desno) == 3 and len(lijevo) <= 3:
+                return lijevo + desno
+            return lijevo + "." + desno
+        if all(len(dio) == 3 for dio in dijelovi[1:]):
+            return "".join(dijelovi)
+        return "".join(dijelovi[:-1]) + "." + dijelovi[-1]
+
+    def decimalna_cijena(self, vrijednost):
+        cijena = self.normaliziraj_cijenu(vrijednost)
+        if not cijena:
+            return Decimal("0")
+        try:
+            return Decimal(cijena.replace(".", "").replace(",", "."))
+        except InvalidOperation:
+            return Decimal("0")
+
+    def formatiraj_cijenu_unosa(self, var):
+        var.set(self.normaliziraj_cijenu(var.get()))
 
     def inicijaliziraj_sustav(self):
         for mapa in [BACKUP_MAPA, DOKUMENTI_MAPA]:
@@ -354,6 +424,7 @@ class GarancijeApp:
         red = ["" if vrijednost is None else str(vrijednost) for vrijednost in red[:len(STUPCI)]]
         if not red[0]:
             red[0] = str(uuid.uuid4())[:8]
+        red[5] = self.normaliziraj_cijenu(red[5])
         if not red[8]:
             red[8] = self.izracunaj_istek(red[6], red[7])
         return red
@@ -395,11 +466,13 @@ class GarancijeApp:
     def popravi_i_ucitaj_podatke(self):
         self.svi_podaci = self.ucitaj_sve_iz_baze()
         self.servisi_podaci = self.ucitaj_servise_iz_baze()
+        if self.svi_podaci:
+            self.spremi_sve_u_bazu()
         self.osvjezi_tablicu_i_statistiku()
 
     def ucitaj_sve_iz_baze(self):
         cur = self.db.execute(f"SELECT {', '.join(DB_STUPCI)} FROM garancije ORDER BY rowid")
-        return [["" if vrijednost is None else str(vrijednost) for vrijednost in red] for red in cur.fetchall()]
+        return [self.normaliziraj_redak_podataka(["" if vrijednost is None else str(vrijednost) for vrijednost in red]) for red in cur.fetchall()]
 
     def spremi_sve_u_bazu(self):
         sada = datetime.now().isoformat(timespec="seconds")
@@ -547,7 +620,7 @@ class GarancijeApp:
             "success": c["success"],
         }
         bg = pozadine.get(vrsta, c["secondary"])
-        return tk.Button(
+        gumb = tk.Button(
             roditelj,
             text=tekst,
             command=naredba,
@@ -563,10 +636,34 @@ class GarancijeApp:
             padx=12,
             pady=7,
         )
+        gumb._base_font_size = font_size
+        gumb._base_padx = 12
+        gumb._base_pady = 7
+        self.skalabilni_gumbi.append(gumb)
+        return gumb
 
     def labela(self, roditelj, tekst, bg=None, fg=None, font=('Segoe UI', 10), **kwargs):
         c = self.boje
         return tk.Label(roditelj, text=tekst, bg=bg or c["bg"], fg=fg or c["text"], font=font, **kwargs)
+
+    def kreiraj_unos_cijene(self, roditelj, var, font=('Segoe UI', 10), width=None):
+        postavke = {"textvariable": var, "font": font}
+        if width:
+            postavke["width"] = width
+        unos = ttk.Entry(roditelj, **postavke)
+        unos.bind("<FocusOut>", lambda _event, v=var: self.formatiraj_cijenu_unosa(v))
+        return unos
+
+    def kreiraj_unos_datuma(self, roditelj, var, bg=None, font=('Segoe UI', 10), width=None):
+        okvir = tk.Frame(roditelj, bg=bg or self.boje["bg"])
+        postavke = {"textvariable": var, "font": font}
+        if width:
+            postavke["width"] = width
+        unos = ttk.Entry(okvir, **postavke)
+        unos.pack(side="left", fill="x", expand=True, ipady=3)
+        unos.bind("<Double-1>", lambda _event, v=var: self.otvori_kalendar(v))
+        self.gumb(okvir, self.t("calendar_button"), lambda v=var: self.otvori_kalendar(v), "secondary", 8).pack(side="right", padx=(6, 0))
+        return okvir
 
     def stiliziraj_prozor(self, prozor, naslov, geometrija=None):
         prozor.title(naslov)
@@ -574,47 +671,179 @@ class GarancijeApp:
             prozor.geometry(geometrija)
         prozor.configure(bg=self.boje["bg"])
 
+    def datum_iz_teksta(self, tekst):
+        tekst = (tekst or "").strip()
+        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(tekst, fmt)
+            except ValueError:
+                pass
+        return datetime.now()
+
+    def otvori_kalendar(self, var):
+        trenutni = self.datum_iz_teksta(var.get())
+        stanje = {"godina": trenutni.year, "mjesec": trenutni.month}
+
+        win = tk.Toplevel(self.root)
+        self.stiliziraj_prozor(win, self.t("calendar_title"), "320x330")
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        zaglavlje = tk.Frame(win, bg=self.boje["bg"])
+        zaglavlje.pack(fill="x", padx=14, pady=(14, 8))
+
+        self.gumb(zaglavlje, "<", lambda: promijeni_mjesec(-1), "secondary", 9).pack(side="left", padx=(0, 8))
+
+        naslov = self.labela(zaglavlje, "", bg=self.boje["bg"], fg=self.boje["text"], font=('Segoe UI', 12, 'bold'))
+        naslov.pack(side="left", fill="x", expand=True)
+
+        self.gumb(zaglavlje, ">", lambda: promijeni_mjesec(1), "secondary", 9).pack(side="right", padx=(8, 0))
+
+        dani_okvir = tk.Frame(win, bg=self.boje["bg"])
+        dani_okvir.pack(fill="both", expand=True, padx=14)
+
+        def odaberi(dan):
+            odabrani = datetime(stanje["godina"], stanje["mjesec"], dan)
+            var.set(odabrani.strftime("%d.%m.%Y"))
+            win.destroy()
+
+        def promijeni_mjesec(korak):
+            mjesec = stanje["mjesec"] + korak
+            godina = stanje["godina"]
+            if mjesec < 1:
+                mjesec = 12
+                godina -= 1
+            elif mjesec > 12:
+                mjesec = 1
+                godina += 1
+            stanje["mjesec"] = mjesec
+            stanje["godina"] = godina
+            nacrtaj()
+
+        def nacrtaj():
+            for widget in dani_okvir.winfo_children():
+                widget.destroy()
+
+            mjesec = stanje["mjesec"]
+            godina = stanje["godina"]
+            naslov.config(text=f"{NAZIVI_MJESECI.get(self.jezik, NAZIVI_MJESECI['en'])[mjesec]} {godina}")
+
+            for stupac, dan in enumerate(DANI_U_TJEDNU.get(self.jezik, DANI_U_TJEDNU["en"])):
+                self.labela(dani_okvir, dan, bg=self.boje["bg"], fg=self.boje["muted"], font=('Segoe UI', 9, 'bold')).grid(row=0, column=stupac, sticky="nsew", pady=(0, 4))
+                dani_okvir.grid_columnconfigure(stupac, weight=1, uniform="dan")
+
+            danas = datetime.now()
+            mjesecni_dani = calendar.Calendar(firstweekday=0).monthdayscalendar(godina, mjesec)
+            for redak, tjedan in enumerate(mjesecni_dani, 1):
+                for stupac, dan in enumerate(tjedan):
+                    if dan == 0:
+                        self.labela(dani_okvir, "", bg=self.boje["bg"]).grid(row=redak, column=stupac, sticky="nsew", padx=2, pady=2)
+                        continue
+                    vrsta = "primary" if danas.year == godina and danas.month == mjesec and danas.day == dan else "secondary"
+                    self.gumb(dani_okvir, str(dan), lambda d=dan: odaberi(d), vrsta, 9).grid(row=redak, column=stupac, sticky="nsew", padx=2, pady=2)
+
+        nacrtaj()
+
+        def odaberi_danas():
+            danas = datetime.now()
+            stanje.update({"mjesec": danas.month, "godina": danas.year})
+            var.set(danas.strftime("%d.%m.%Y"))
+            win.destroy()
+
+        self.gumb(win, self.t("today"), odaberi_danas, "primary", 9).pack(fill="x", padx=14, pady=(8, 14))
+
     def kreiraj_sucelje(self):
         c = self.boje
+        self.skalabilni_gumbi = []
 
-        sidebar = tk.Frame(self.root, bg=c["sidebar"], width=330)
+        sidebar = tk.Frame(self.root, bg=c["sidebar"], width=320)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
+        self.sidebar = sidebar
 
         header = tk.Frame(sidebar, bg=c["sidebar"])
-        header.pack(fill="x", padx=22, pady=(24, 18))
+        header.pack(fill="x", padx=20, pady=(18, 12))
         self.labela(header, self.t("app_title"), bg=c["sidebar"], fg=c["sidebar_text"], font=('Segoe UI', 22, 'bold')).pack(anchor="w")
         self.labela(header, self.t("app_subtitle"), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 9), wraplength=260, justify="left").pack(anchor="w", pady=(4, 0))
 
-        self.labela(sidebar, self.t("new_entry"), bg=c["sidebar"], fg=c["sidebar_text"], font=('Segoe UI', 12, 'bold')).pack(anchor="w", padx=22, pady=(4, 10))
-        self.gumb(sidebar, self.t("ocr_button"), self.pravi_ocr_izbornik, "secondary").pack(fill="x", padx=22, pady=(0, 14))
+        sidebar_dno = tk.Frame(sidebar, bg=c["sidebar"])
+        sidebar_dno.pack(side="bottom", fill="x", padx=18, pady=(8, 16))
+
+        okvir_akcije = tk.Frame(sidebar_dno, bg=c["sidebar"])
+        okvir_akcije.pack(fill="x", pady=(0, 10))
+        self.gumb(okvir_akcije, self.t("add"), self.spremi_novi, "primary", 10).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.gumb(okvir_akcije, self.t("clear"), self.ocisti_unos, "secondary", 10).pack(side="right", fill="x", expand=True, padx=(6, 0))
+        self.gumb(sidebar_dno, self.t("backup"), self.napravi_rucni_backup, "secondary", 9).pack(fill="x")
+
+        form_outer = tk.Frame(sidebar, bg=c["sidebar"])
+        form_outer.pack(fill="both", expand=True)
+
+        form_canvas = tk.Canvas(form_outer, bg=c["sidebar"], bd=0, highlightthickness=0)
+        form_scroll = ttk.Scrollbar(form_outer, orient="vertical", command=form_canvas.yview)
+        form_canvas.configure(yscrollcommand=form_scroll.set)
+        form_scroll.pack(side="right", fill="y")
+        form_canvas.pack(side="left", fill="both", expand=True)
+
+        form = tk.Frame(form_canvas, bg=c["sidebar"])
+        form_window = form_canvas.create_window((0, 0), window=form, anchor="nw")
+
+        def osvjezi_sidebar_scroll(_event=None):
+            form_canvas.configure(scrollregion=form_canvas.bbox("all"))
+
+        def prilagodi_sidebar_sirinu(event):
+            form_canvas.itemconfigure(form_window, width=event.width)
+
+        def pomakni_sidebar(event):
+            if getattr(event, "num", None) == 4:
+                pomak = -1
+            elif getattr(event, "num", None) == 5:
+                pomak = 1
+            else:
+                pomak = -1 if event.delta > 0 else 1
+            form_canvas.yview_scroll(pomak, "units")
+
+        def ukljuci_kotacic(_event):
+            form_canvas.bind_all("<MouseWheel>", pomakni_sidebar)
+            form_canvas.bind_all("<Button-4>", pomakni_sidebar)
+            form_canvas.bind_all("<Button-5>", pomakni_sidebar)
+
+        def iskljuci_kotacic(_event):
+            form_canvas.unbind_all("<MouseWheel>")
+            form_canvas.unbind_all("<Button-4>")
+            form_canvas.unbind_all("<Button-5>")
+
+        form.bind("<Configure>", osvjezi_sidebar_scroll)
+        form_canvas.bind("<Configure>", prilagodi_sidebar_sirinu)
+        form_canvas.bind("<Enter>", ukljuci_kotacic)
+        form.bind("<Enter>", ukljuci_kotacic)
+        form_outer.bind("<Leave>", iskljuci_kotacic)
+
+        self.labela(form, self.t("new_entry"), bg=c["sidebar"], fg=c["sidebar_text"], font=('Segoe UI', 12, 'bold')).pack(anchor="w", padx=22, pady=(4, 10))
+        self.gumb(form, self.t("ocr_button"), self.pravi_ocr_izbornik, "secondary").pack(fill="x", padx=22, pady=(0, 14))
 
         self.unos_vars = {}
         for p in STUPCI[1:-2]:
-            self.labela(sidebar, self.naziv_stupca(p), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 8, 'bold')).pack(anchor="w", padx=22, pady=(6, 2))
+            self.labela(form, self.naziv_stupca(p), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 8, 'bold')).pack(anchor="w", padx=22, pady=(6, 2))
             v = tk.StringVar()
-            ttk.Entry(sidebar, textvariable=v, font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1, ipady=3)
+            if p == "Cijena (€)":
+                self.kreiraj_unos_cijene(form, v, font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1, ipady=3)
+            elif p == "Datum Kupovine":
+                self.kreiraj_unos_datuma(form, v, bg=c["sidebar"], font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1)
+            else:
+                ttk.Entry(form, textvariable=v, font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1, ipady=3)
             self.unos_vars[p] = v
 
         for naslov, var in [(self.naziv_stupca("Originalni Račun"), self.putanja_orig_racun), (self.naziv_stupca("Produljeno Jamstvo"), self.putanja_prod_jamstvo)]:
-            self.labela(sidebar, naslov, bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 8, 'bold')).pack(anchor="w", padx=22, pady=(10, 2))
-            okvir = tk.Frame(sidebar, bg=c["sidebar"])
+            self.labela(form, naslov, bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 8, 'bold')).pack(anchor="w", padx=22, pady=(10, 2))
+            okvir = tk.Frame(form, bg=c["sidebar"])
             okvir.pack(fill="x", padx=22)
             ttk.Entry(okvir, textvariable=var, state="readonly", font=('Segoe UI', 9)).pack(side="left", fill="x", expand=True, ipady=3)
             self.gumb(okvir, "X", lambda v=var: v.set(""), "secondary", 9).pack(side="right", padx=(6, 0))
             self.gumb(okvir, self.t("choose"), lambda v=var: self.odaberi_doc(v), "secondary", 9).pack(side="right", padx=(6, 0))
 
-        okvir_akcije = tk.Frame(sidebar, bg=c["sidebar"])
-        okvir_akcije.pack(fill="x", padx=22, pady=18)
-        self.gumb(okvir_akcije, self.t("add"), self.spremi_novi, "primary", 10).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.gumb(okvir_akcije, self.t("clear"), self.ocisti_unos, "secondary", 10).pack(side="right", fill="x", expand=True, padx=(6, 0))
-
-        bot = tk.Frame(sidebar, bg=c["sidebar"])
-        bot.pack(side="bottom", fill="x", padx=22, pady=18)
-        self.gumb(bot, self.t("backup"), self.napravi_rucni_backup, "secondary", 9).pack(fill="x")
-
         main = tk.Frame(self.root, bg=c["bg"])
         main.pack(side="right", fill="both", expand=True, padx=24, pady=22)
+        self.main_frame = main
 
         top_bar = tk.Frame(main, bg=c["bg"])
         top_bar.pack(fill="x", pady=(0, 8))
@@ -743,6 +972,8 @@ class GarancijeApp:
         self.menu.add_separator()
         self.menu.add_command(label=self.t("menu_service_history"), command=self.otvori_servis)
         self.menu.add_command(label=self.t("menu_edit_product"), command=self.uredi_proizvod)
+        self.root.bind("<Configure>", self.prilagodi_responzivnost)
+        self.root.after_idle(self.prilagodi_responzivnost)
 
     def obnovi_sucelje(self):
         spremljeni_unosi = {}
@@ -818,7 +1049,46 @@ class GarancijeApp:
 
         self.tree.column("ID", width=0, minwidth=0, stretch=False)
         for s in vidljivi_stupci:
-            self.tree.column(s, width=max(32, sirine[s]), stretch=False)
+            sirina = max(32, sirine[s])
+            min_sirina = min(self.min_sirine_stupaca.get(s, 60), sirina)
+            self.tree.column(s, width=sirina, minwidth=min_sirina, stretch=False)
+
+    def prilagodi_responzivnost(self, event=None):
+        if event and event.widget is not self.root:
+            return
+        if not hasattr(self, "sidebar") or not hasattr(self, "main_frame"):
+            return
+
+        sirina = event.width if event else self.root.winfo_width()
+        visina = event.height if event else self.root.winfo_height()
+        skala = max(0.78, min(1.0, sirina / 1280, visina / 760))
+        sidebar_sirina = 270 if sirina < 1050 else 300 if sirina < 1250 else 320
+        main_padx = 12 if sirina < 1050 else 18 if sirina < 1250 else 24
+        main_pady = 10 if visina < 680 else 16 if visina < 760 else 22
+
+        if self._zadnja_ui_skala == (skala, sidebar_sirina, main_padx, main_pady):
+            return
+        self._zadnja_ui_skala = (skala, sidebar_sirina, main_padx, main_pady)
+
+        self.sidebar.configure(width=sidebar_sirina)
+        self.main_frame.pack_configure(padx=main_padx, pady=main_pady)
+
+        for gumb in list(self.skalabilni_gumbi):
+            if not gumb.winfo_exists():
+                continue
+            font_size = max(8, int(gumb._base_font_size * skala))
+            gumb.config(
+                font=('Segoe UI', font_size, 'bold'),
+                padx=max(6, int(gumb._base_padx * skala)),
+                pady=max(4, int(gumb._base_pady * skala)),
+            )
+
+        if hasattr(self, "style"):
+            font_size = max(8, int(10 * skala))
+            self.style.configure("Treeview", rowheight=max(24, int(32 * skala)), font=('Segoe UI', font_size))
+            self.style.configure("Treeview.Heading", font=('Segoe UI', font_size, 'bold'))
+
+        self.prilagodi_sirine_stupaca()
 
     # --- FUNKCIJA OČISTI UNOS ---
 
@@ -846,7 +1116,7 @@ class GarancijeApp:
             prepoznat_datum = datum_match.group(0).replace('/', '.') if datum_match else ""
 
             cijene = re.findall(r'\d+[,.]\d{2}', očitani_tekst)
-            prepoznata_cijena = cijene[-1] if cijene else ""
+            prepoznata_cijena = self.normaliziraj_cijenu(cijene[-1]) if cijene else ""
 
             win = tk.Toplevel(self.root)
             self.stiliziraj_prozor(win, self.t("ocr_window_title"), "640x650")
@@ -863,18 +1133,17 @@ class GarancijeApp:
             okvir_podataka.pack(fill="x", padx=20)
 
             self.labela(okvir_podataka, f"{self.t('date')}:", bg=self.boje["bg"]).pack(side="left")
-            unos_datum = ttk.Entry(okvir_podataka, width=15)
-            unos_datum.pack(side="left", padx=10)
-            unos_datum.insert(0, prepoznat_datum)
+            datum_var = tk.StringVar(value=prepoznat_datum)
+            self.kreiraj_unos_datuma(okvir_podataka, datum_var, bg=self.boje["bg"], width=12).pack(side="left", padx=10)
 
             self.labela(okvir_podataka, f"{self.t('amount')}:", bg=self.boje["bg"]).pack(side="left", padx=(15, 0))
-            unos_cijena = ttk.Entry(okvir_podataka, width=15)
+            cijena_var = tk.StringVar(value=prepoznata_cijena)
+            unos_cijena = self.kreiraj_unos_cijene(okvir_podataka, cijena_var, width=15)
             unos_cijena.pack(side="left", padx=10)
-            unos_cijena.insert(0, prepoznata_cijena)
 
             def prebaci_podatke():
-                self.unos_vars["Datum Kupovine"].set(unos_datum.get())
-                self.unos_vars["Cijena (€)"].set(unos_cijena.get())
+                self.unos_vars["Datum Kupovine"].set(datum_var.get())
+                self.unos_vars["Cijena (€)"].set(self.normaliziraj_cijenu(cijena_var.get()))
                 self.putanja_orig_racun.set(putanja)
                 win.destroy()
                 messagebox.showinfo(self.t("transferred_title"), self.t("transferred_msg"))
@@ -914,6 +1183,9 @@ class GarancijeApp:
         if not v["Naziv Proizvoda"]:
             messagebox.showwarning(self.t("required_title"), self.t("required_product"))
             return
+
+        v["Cijena (€)"] = self.normaliziraj_cijenu(v["Cijena (€)"])
+        self.unos_vars["Cijena (€)"].set(v["Cijena (€)"])
 
         p_id = str(uuid.uuid4())[:8]
         istek = self.izracunaj_istek(v["Datum Kupovine"], v["Trajanje Garancije (god)"])
@@ -1042,7 +1314,7 @@ class GarancijeApp:
             vrijednosti["Broj Računa"],
             vrijednosti["Naziv Proizvoda"],
             vrijednosti["Šifra"],
-            vrijednosti["Cijena (€)"],
+            self.normaliziraj_cijenu(vrijednosti["Cijena (€)"]),
             vrijednosti["Datum Kupovine"],
             vrijednosti["Trajanje Garancije (god)"],
             istek,
@@ -1090,6 +1362,7 @@ class GarancijeApp:
             if self.trenutni_filter == "ISTEKLI" and status != "isteklo": continue
 
             prikaz = list(red)
+            prikaz[5] = self.normaliziraj_cijenu(red[5])
             prikaz[9] = self.t("doc_receipt") if red[9] else ""
             prikaz[10] = self.t("doc_warranty") if red[10] else ""
             self.tree.insert("", "end", values=prikaz, tags=(status,))
@@ -1192,10 +1465,16 @@ class GarancijeApp:
                 for i, s in enumerate(STUPCI[1:-2], 1):
                     self.labela(body, self.naziv_stupca(s), bg=self.boje["bg"], fg=self.boje["muted"], font=('Segoe UI', 9, 'bold')).pack(anchor="w", pady=(8, 2))
                     v = tk.StringVar(value=r[i])
-                    ttk.Entry(body, textvariable=v).pack(fill="x", ipady=4)
+                    if s == "Cijena (€)":
+                        self.kreiraj_unos_cijene(body, v).pack(fill="x", ipady=4)
+                    elif s == "Datum Kupovine":
+                        self.kreiraj_unos_datuma(body, v, bg=self.boje["bg"]).pack(fill="x")
+                    else:
+                        ttk.Entry(body, textvariable=v).pack(fill="x", ipady=4)
                     nove_v[s] = v
                 def spasi():
                     r[1:9] = [nove_v[s].get() for s in STUPCI[1:-2]]
+                    r[5] = self.normaliziraj_cijenu(r[5])
                     r[8] = self.izracunaj_istek(r[6], r[7])
                     self.spremi_sve_u_bazu()
                     self.osvjezi_tablicu_i_statistiku()
@@ -1324,7 +1603,10 @@ class GarancijeApp:
 
     def sortiraj(self, col):
         idx = STUPCI.index(col)
-        self.svi_podaci.sort(key=lambda x: x[idx].lower() if isinstance(x[idx], str) else x[idx])
+        if col == "Cijena (€)":
+            self.svi_podaci.sort(key=lambda x: self.decimalna_cijena(x[idx]))
+        else:
+            self.svi_podaci.sort(key=lambda x: x[idx].lower() if isinstance(x[idx], str) else x[idx])
         self.osvjezi_tablicu_i_statistiku()
 
 if __name__ == "__main__":
