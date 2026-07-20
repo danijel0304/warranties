@@ -87,7 +87,9 @@ automatically after changing settings.
 
 After startup, the app checks the latest GitHub release in the background. If a
 newer version is available, it asks whether to open the download page. If the
-user declines, the same release is not shown again.
+user declines, the same release is not shown again. The **Check updates** button
+runs the same check manually and also reports when the current version is up to
+date.
 
 ## Receipt OCR Optional
 
@@ -110,6 +112,11 @@ importing that file later can restore the attached documents.
 
 If an older `moje_garancije.csv` or `servisi_log.json` file already exists, it
 is migrated automatically into `garancije.db` on first launch.
+
+The **Load data** button can restore data from another folder, such as a backup
+or an older app folder. The app backs up the current data first, then loads
+`garancije.db` if it exists, or imports `moje_garancije.csv` / another Excel or
+CSV file. Restored data and documents are saved into the normal app data folder.
 
 Before manually replacing the database or document folder, close the app and
 back up the whole local data folder.
@@ -208,7 +215,9 @@ nakon promjene postavki.
 
 Nakon pokretanja program u pozadini provjerava zadnji GitHub release. Ako je
 dostupna novija verzija, pita korisnika želi li otvoriti stranicu za
-preuzimanje. Ako korisnik odbije, ista verzija se više ne nudi.
+preuzimanje. Ako korisnik odbije, ista verzija se više ne nudi. Gumb
+**Provjeri update** pokreće istu provjeru ručno i javlja ako je trenutačna
+verzija već najnovija.
 
 ## OCR Računa Neobavezno
 
@@ -231,6 +240,12 @@ vratiti priložene račune i jamstva.
 
 Ako već postoji stari `moje_garancije.csv` ili `servisi_log.json`, program ih
 pri prvom pokretanju automatski prebacuje u `garancije.db`.
+
+Gumb **Učitaj podatke** može vratiti podatke iz druge mape, primjerice iz
+sigurnosne kopije ili stare programske mape. Program prvo napravi sigurnosnu
+kopiju trenutnih podataka, zatim učita `garancije.db` ako postoji, ili uveze
+`moje_garancije.csv` / drugu Excel ili CSV datoteku. Učitani podaci i dokumenti
+spremaju se u normalnu programsku mapu s podacima.
 
 Prije ručne zamjene baze ili mape s dokumentima preporučuje se zatvoriti
 program i napraviti sigurnosnu kopiju cijele lokalne mape s podacima.

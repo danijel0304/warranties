@@ -43,7 +43,7 @@ SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
 BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
 POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 GITHUB_REPO = "danijel0304/warranties"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -77,6 +77,8 @@ PRIJEVODI = {
         "add": "Dodaj",
         "clear": "Očisti",
         "backup": "Sigurnosna kopija",
+        "restore_data": "Učitaj podatke",
+        "check_updates": "Provjeri update",
         "theme": "Tema",
         "theme_dark": "Tamna",
         "theme_light": "Svijetla",
@@ -140,6 +142,22 @@ PRIJEVODI = {
         "backup_error": "Došlo je do greške prilikom izrade sigurnosne kopije:\n{error}",
         "update_available_title": "Dostupna je nova verzija",
         "update_available_msg": "Dostupna je nova verzija programa Garancije.\n\nTrenutna verzija: {current}\nNova verzija: {latest}\n\nŽelite li otvoriti stranicu za preuzimanje?",
+        "update_current_title": "Program je ažuran",
+        "update_current_msg": "Koristite najnoviju verziju programa ({current}).",
+        "update_failed_title": "Provjera nije uspjela",
+        "update_failed_msg": "Nisam uspio provjeriti postoji li nova verzija. Provjerite internet vezu i pokušajte ponovno.",
+        "update_in_progress_title": "Provjera je u tijeku",
+        "update_in_progress_msg": "Provjera nove verzije već je pokrenuta.",
+        "restore_select_title": "Odaberi mapu s podacima ili sigurnosnom kopijom",
+        "restore_confirm_title": "Učitavanje podataka",
+        "restore_confirm_msg": "Program će napraviti sigurnosnu kopiju trenutnih podataka i zatim učitati podatke iz:\n{path}\n\nTrenutni podaci u programu bit će zamijenjeni. Nastaviti?",
+        "restore_missing_title": "Podaci nisu pronađeni",
+        "restore_missing_msg": "U odabranoj mapi nisam našao garancije.db, moje_garancije.csv ili Excel/CSV datoteku s podacima.",
+        "restore_same_source_msg": "Odabrali ste trenutačnu programsku mapu. Odaberite drugu mapu ili sigurnosnu kopiju.",
+        "restore_invalid_db": "Odabrana baza ne sadrži podatke programa Garancije.",
+        "restore_success_title": "Podaci učitani",
+        "restore_success_msg": "Podaci su učitani i spremljeni u programsku mapu:\n{path}\n\nSigurnosna kopija prethodnih podataka spremljena je u:\n{backup}",
+        "restore_error": "Došlo je do greške prilikom učitavanja podataka:\n{error}",
         "doc_receipt": "RAČUN",
         "doc_warranty": "JAMSTVO",
         "columns": {
@@ -166,6 +184,8 @@ PRIJEVODI = {
         "add": "Add",
         "clear": "Clear",
         "backup": "Backup",
+        "restore_data": "Load data",
+        "check_updates": "Check updates",
         "theme": "Theme",
         "theme_dark": "Dark",
         "theme_light": "Light",
@@ -229,6 +249,22 @@ PRIJEVODI = {
         "backup_error": "An error occurred while creating the backup:\n{error}",
         "update_available_title": "Update available",
         "update_available_msg": "A new version of Warranties is available.\n\nCurrent version: {current}\nNew version: {latest}\n\nDo you want to open the download page?",
+        "update_current_title": "Up to date",
+        "update_current_msg": "You are using the latest version ({current}).",
+        "update_failed_title": "Update check failed",
+        "update_failed_msg": "I could not check for a new version. Check the internet connection and try again.",
+        "update_in_progress_title": "Check in progress",
+        "update_in_progress_msg": "The update check is already running.",
+        "restore_select_title": "Choose a data or backup folder",
+        "restore_confirm_title": "Load data",
+        "restore_confirm_msg": "The app will back up the current data and then load data from:\n{path}\n\nCurrent app data will be replaced. Continue?",
+        "restore_missing_title": "Data not found",
+        "restore_missing_msg": "I could not find garancije.db, moje_garancije.csv, or an Excel/CSV data file in the selected folder.",
+        "restore_same_source_msg": "You selected the current app data folder. Choose another folder or a backup.",
+        "restore_invalid_db": "The selected database does not contain Warranties app data.",
+        "restore_success_title": "Data loaded",
+        "restore_success_msg": "Data was loaded and saved to the app data folder:\n{path}\n\nThe previous data backup was saved to:\n{backup}",
+        "restore_error": "An error occurred while loading data:\n{error}",
         "doc_receipt": "RECEIPT",
         "doc_warranty": "WARRANTY",
         "columns": {
@@ -400,29 +436,35 @@ class GarancijeApp:
             return None
         return {"tag": tag, "url": podaci.get("html_url") or GITHUB_RELEASES_URL}
 
-    def provjeri_update_u_pozadini(self):
+    def provjeri_update_u_pozadini(self, rucno=False):
         if self.update_provjera_u_tijeku:
+            if rucno:
+                messagebox.showinfo(self.t("update_in_progress_title"), self.t("update_in_progress_msg"))
             return
         self.update_provjera_u_tijeku = True
 
         def posao():
             release = self.dohvati_zadnji_github_release()
             try:
-                self.root.after(0, lambda: self.obradi_pronadeni_update(release))
+                self.root.after(0, lambda: self.obradi_pronadeni_update(release, rucno))
             except (tk.TclError, RuntimeError):
                 pass
 
         threading.Thread(target=posao, daemon=True).start()
 
-    def obradi_pronadeni_update(self, release):
+    def obradi_pronadeni_update(self, release, rucno=False):
         self.update_provjera_u_tijeku = False
         if not release:
+            if rucno:
+                messagebox.showwarning(self.t("update_failed_title"), self.t("update_failed_msg"))
             return
 
         latest_tag = release["tag"]
         if not self.je_novija_verzija(latest_tag, APP_VERSION):
+            if rucno:
+                messagebox.showinfo(self.t("update_current_title"), self.t("update_current_msg", current=APP_VERSION))
             return
-        if self.postavke.get("ignorirani_update") == latest_tag:
+        if not rucno and self.postavke.get("ignorirani_update") == latest_tag:
             return
 
         otvori = messagebox.askyesno(
@@ -858,6 +900,8 @@ class GarancijeApp:
         self.gumb(okvir_akcije, self.t("add"), self.spremi_novi, "primary", 10).pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.gumb(okvir_akcije, self.t("clear"), self.ocisti_unos, "secondary", 10).pack(side="right", fill="x", expand=True, padx=(6, 0))
         self.gumb(sidebar_dno, self.t("backup"), self.napravi_rucni_backup, "secondary", 9).pack(fill="x")
+        self.gumb(sidebar_dno, self.t("restore_data"), self.ucitaj_podatke_iz_druge_mape, "secondary", 9).pack(fill="x", pady=(8, 0))
+        self.gumb(sidebar_dno, self.t("check_updates"), lambda: self.provjeri_update_u_pozadini(rucno=True), "secondary", 9).pack(fill="x", pady=(8, 0))
 
         form_outer = tk.Frame(sidebar, bg=c["sidebar"])
         form_outer.pack(fill="both", expand=True)
@@ -1600,46 +1644,169 @@ class GarancijeApp:
             else:
                 messagebox.showinfo(self.t("export_title"), self.t("export_success"))
 
+    def uvezi_podatke_iz_datoteke(self, p, zamijeni=False, ocisti_dokumente=False):
+        df = pd.read_excel(p) if p.lower().endswith('.xlsx') else pd.read_csv(p)
+        mapa_uvoza = os.path.dirname(os.path.abspath(p))
+        if zamijeni:
+            self.svi_podaci = []
+            self.servisi_podaci = {}
+            with self.db:
+                self.db.execute("DELETE FROM servisi")
+            if ocisti_dokumente:
+                self.ocisti_programske_dokumente()
+
+        indeks_po_id = {r[0]: i for i, r in enumerate(self.svi_podaci) if r[0]}
+        broj_zapisa = 0
+        vraceni_dokumenti = 0
+        dokumenti_nedostaju = 0
+
+        for _, red in df.iterrows():
+            novi, vraceno, nedostaje = self.redak_iz_importa(red, mapa_uvoza)
+            if not any(novi[i] for i in [1, 2, 3, 4, 5, 6, 7, 9, 10]):
+                continue
+
+            postojeci_idx = indeks_po_id.get(novi[0])
+            if postojeci_idx is None:
+                indeks_po_id[novi[0]] = len(self.svi_podaci)
+                self.svi_podaci.append(novi)
+            else:
+                stari = self.svi_podaci[postojeci_idx]
+                if not novi[9] and stari[9]:
+                    novi[9] = stari[9]
+                if not novi[10] and stari[10]:
+                    novi[10] = stari[10]
+                self.svi_podaci[postojeci_idx] = novi
+
+            broj_zapisa += 1
+            vraceni_dokumenti += vraceno
+            dokumenti_nedostaju += nedostaje
+
+        self.uvezi_servise_iz_backupa(mapa_uvoza)
+        self.spremi_sve_u_bazu()
+        self.osvjezi_tablicu_i_statistiku()
+        return broj_zapisa, vraceni_dokumenti, dokumenti_nedostaju
+
     def uvezi_iz_excela(self):
         p = filedialog.askopenfilename(filetypes=[(self.t("filetype_excel_csv"), "*.xlsx *.csv")])
         if not p: return
         try:
-            df = pd.read_excel(p) if p.lower().endswith('.xlsx') else pd.read_csv(p)
-            mapa_uvoza = os.path.dirname(os.path.abspath(p))
-            indeks_po_id = {r[0]: i for i, r in enumerate(self.svi_podaci) if r[0]}
-            broj_zapisa = 0
-            vraceni_dokumenti = 0
-            dokumenti_nedostaju = 0
-
-            for _, red in df.iterrows():
-                novi, vraceno, nedostaje = self.redak_iz_importa(red, mapa_uvoza)
-                if not any(novi[i] for i in [1, 2, 3, 4, 5, 6, 7, 9, 10]):
-                    continue
-
-                postojeci_idx = indeks_po_id.get(novi[0])
-                if postojeci_idx is None:
-                    indeks_po_id[novi[0]] = len(self.svi_podaci)
-                    self.svi_podaci.append(novi)
-                else:
-                    stari = self.svi_podaci[postojeci_idx]
-                    if not novi[9] and stari[9]:
-                        novi[9] = stari[9]
-                    if not novi[10] and stari[10]:
-                        novi[10] = stari[10]
-                    self.svi_podaci[postojeci_idx] = novi
-
-                broj_zapisa += 1
-                vraceni_dokumenti += vraceno
-                dokumenti_nedostaju += nedostaje
-
-            self.uvezi_servise_iz_backupa(mapa_uvoza)
-            self.spremi_sve_u_bazu()
-            self.osvjezi_tablicu_i_statistiku()
+            broj_zapisa, vraceni_dokumenti, dokumenti_nedostaju = self.uvezi_podatke_iz_datoteke(p)
             messagebox.showinfo(
                 self.t("import_title"),
                 self.t("import_success", records=broj_zapisa, docs=vraceni_dokumenti, missing=dokumenti_nedostaju)
             )
         except Exception as e: messagebox.showerror(self.t("error_title"), str(e))
+
+    def pronadi_podatke_za_ucitavanje(self, mapa):
+        baza = os.path.join(mapa, "garancije.db")
+        if os.path.isfile(baza):
+            return {"tip": "db", "putanja": baza}
+
+        poznate_datoteke = [
+            os.path.join(mapa, "moje_garancije.csv"),
+            os.path.join(mapa, "Garancije.xlsx"),
+            os.path.join(mapa, "Garancije_Eksport.xlsx"),
+        ]
+        for putanja in poznate_datoteke:
+            if os.path.isfile(putanja):
+                return {"tip": "tablica", "putanja": putanja}
+
+        kandidati = []
+        try:
+            for naziv in os.listdir(mapa):
+                putanja = os.path.join(mapa, naziv)
+                if os.path.isfile(putanja) and naziv.lower().endswith((".xlsx", ".csv")):
+                    kandidati.append(putanja)
+        except OSError:
+            return None
+
+        if kandidati:
+            return {"tip": "tablica", "putanja": sorted(kandidati)[0]}
+        return None
+
+    def napravi_backup_prije_ucitavanja(self):
+        datum = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_dir = os.path.join(BACKUP_MAPA, f"Prije_Ucitavanja_{datum}")
+        os.makedirs(backup_dir)
+
+        if os.path.exists(DATABASE_DATOTEKA):
+            self.napravi_backup_baze(os.path.join(backup_dir, "garancije.db"))
+        self.izvezi_podatke_u_csv(os.path.join(backup_dir, "moje_garancije.csv"))
+        self.izvezi_servise_u_json(os.path.join(backup_dir, "servisi_log.json"))
+        if os.path.exists(DOKUMENTI_MAPA):
+            self.kopiraj_mapu_dokumenata(backup_dir)
+        return backup_dir
+
+    def kopiraj_dokumente_iz_mape(self, mapa):
+        izvor = os.path.join(mapa, "dokumenti_garancija")
+        if not os.path.isdir(izvor):
+            return
+        os.makedirs(DOKUMENTI_MAPA, exist_ok=True)
+        if os.path.abspath(izvor) != os.path.abspath(DOKUMENTI_MAPA):
+            shutil.copytree(izvor, DOKUMENTI_MAPA, dirs_exist_ok=True)
+
+    def ocisti_programske_dokumente(self):
+        if os.path.isdir(DOKUMENTI_MAPA):
+            shutil.rmtree(DOKUMENTI_MAPA)
+        os.makedirs(DOKUMENTI_MAPA, exist_ok=True)
+
+    def provjeri_bazu_za_ucitavanje(self, izvor):
+        with sqlite3.connect(izvor) as provjera:
+            cur = provjera.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'garancije'")
+            if cur.fetchone() is None:
+                raise ValueError(self.t("restore_invalid_db"))
+
+    def zamijeni_bazu_iz_datoteke(self, izvor):
+        self.provjeri_bazu_za_ucitavanje(izvor)
+        privremena = DATABASE_DATOTEKA + ".restore_tmp"
+        shutil.copy2(izvor, privremena)
+        if self.db:
+            self.db.close()
+            self.db = None
+        os.replace(privremena, DATABASE_DATOTEKA)
+        self.inicijaliziraj_bazu()
+
+    def ucitaj_podatke_iz_druge_mape(self):
+        mapa = filedialog.askdirectory(title=self.t("restore_select_title"))
+        if not mapa:
+            return
+        if os.path.abspath(mapa) == os.path.abspath(BAZNA_MAPA):
+            messagebox.showinfo(self.t("restore_missing_title"), self.t("restore_same_source_msg"))
+            return
+
+        podaci = self.pronadi_podatke_za_ucitavanje(mapa)
+        if not podaci:
+            messagebox.showwarning(self.t("restore_missing_title"), self.t("restore_missing_msg"))
+            return
+
+        if not messagebox.askyesno(self.t("restore_confirm_title"), self.t("restore_confirm_msg", path=mapa)):
+            return
+
+        backup_dir = ""
+        try:
+            backup_dir = self.napravi_backup_prije_ucitavanja()
+            if podaci["tip"] == "db":
+                if os.path.abspath(podaci["putanja"]) == os.path.abspath(DATABASE_DATOTEKA):
+                    messagebox.showinfo(self.t("restore_success_title"), self.t("restore_success_msg", path=BAZNA_MAPA, backup=backup_dir))
+                    return
+                self.zamijeni_bazu_iz_datoteke(podaci["putanja"])
+                self.ocisti_programske_dokumente()
+                self.svi_podaci = self.ucitaj_sve_iz_baze()
+                self.servisi_podaci = self.ucitaj_servise_iz_baze()
+                servis_backup = os.path.join(mapa, "servisi_log.json")
+                if os.path.isfile(servis_backup) and not self.servisi_podaci:
+                    self.servisi_podaci = self.ucitaj_servise_iz_json_datoteke(servis_backup)
+                    self.spremi_sve_servise_u_bazu()
+            else:
+                self.uvezi_podatke_iz_datoteke(podaci["putanja"], zamijeni=True, ocisti_dokumente=True)
+
+            self.kopiraj_dokumente_iz_mape(mapa)
+            self.popravi_i_ucitaj_podatke()
+            messagebox.showinfo(self.t("restore_success_title"), self.t("restore_success_msg", path=BAZNA_MAPA, backup=backup_dir))
+        except Exception as e:
+            if self.db is None:
+                self.inicijaliziraj_bazu()
+            messagebox.showerror(self.t("error_title"), self.t("restore_error", error=e))
 
     def napravi_rucni_backup(self):
         target = filedialog.askdirectory(title=self.t("backup_select_title"))
