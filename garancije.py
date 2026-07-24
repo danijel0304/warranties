@@ -43,10 +43,11 @@ SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
 BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
 POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 GITHUB_REPO = "danijel0304/warranties"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
+PAYPAL_DONATE_URL = "https://www.paypal.com/paypalme/danijel0304"
 
 STUPCI = ["ID", "Trgovina", "Broj Računa", "Naziv Proizvoda", "Šifra", "Cijena (€)", "Datum Kupovine", "Trajanje Garancije (god)", "Datum Isteka Garancije", "Originalni Račun", "Produljeno Jamstvo"]
 DB_STUPCI = [
@@ -70,6 +71,7 @@ PRIJEVODI = {
     "hr": {
         "app_title": "Garancije",
         "app_subtitle": "Evidencija kupnji, računa i servisa",
+        "version_label": "Verzija {version}",
         "new_entry": "Novi unos",
         "ocr_button": "OCR računa",
         "choose": "Odaberi",
@@ -79,6 +81,7 @@ PRIJEVODI = {
         "backup": "Sigurnosna kopija",
         "restore_data": "Učitaj podatke",
         "check_updates": "Provjeri update",
+        "donate": "PayPal donacija",
         "theme": "Tema",
         "theme_dark": "Tamna",
         "theme_light": "Svijetla",
@@ -177,6 +180,7 @@ PRIJEVODI = {
     "en": {
         "app_title": "Warranties",
         "app_subtitle": "Purchases, receipts and service records",
+        "version_label": "Version {version}",
         "new_entry": "New entry",
         "ocr_button": "Receipt OCR",
         "choose": "Choose",
@@ -186,6 +190,7 @@ PRIJEVODI = {
         "backup": "Backup",
         "restore_data": "Load data",
         "check_updates": "Check updates",
+        "donate": "PayPal donation",
         "theme": "Theme",
         "theme_dark": "Dark",
         "theme_light": "Light",
@@ -320,7 +325,7 @@ class GarancijeApp:
 
         self.inicijaliziraj_sustav()
         self.postavi_stilove()
-        self.root.title(self.t("app_title"))
+        self.root.title(f"{self.t('app_title')} v{APP_VERSION}")
         self.kreiraj_sucelje()
         self.popravi_i_ucitaj_podatke()
         self.automatski_lokalni_backup()
@@ -476,6 +481,9 @@ class GarancijeApp:
         else:
             self.postavke["ignorirani_update"] = latest_tag
             self.spremi_postavke()
+
+    def otvori_donaciju(self):
+        webbrowser.open(PAYPAL_DONATE_URL, new=2)
 
     def inicijaliziraj_sustav(self):
         for mapa in [BACKUP_MAPA, DOKUMENTI_MAPA]:
@@ -890,6 +898,7 @@ class GarancijeApp:
         header = tk.Frame(sidebar, bg=c["sidebar"])
         header.pack(fill="x", padx=20, pady=(18, 12))
         self.labela(header, self.t("app_title"), bg=c["sidebar"], fg=c["sidebar_text"], font=('Segoe UI', 22, 'bold')).pack(anchor="w")
+        self.labela(header, self.t("version_label", version=APP_VERSION), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 9, 'bold')).pack(anchor="w", pady=(2, 0))
         self.labela(header, self.t("app_subtitle"), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 9), wraplength=260, justify="left").pack(anchor="w", pady=(4, 0))
 
         sidebar_dno = tk.Frame(sidebar, bg=c["sidebar"])
@@ -902,6 +911,7 @@ class GarancijeApp:
         self.gumb(sidebar_dno, self.t("backup"), self.napravi_rucni_backup, "secondary", 9).pack(fill="x")
         self.gumb(sidebar_dno, self.t("restore_data"), self.ucitaj_podatke_iz_druge_mape, "secondary", 9).pack(fill="x", pady=(8, 0))
         self.gumb(sidebar_dno, self.t("check_updates"), lambda: self.provjeri_update_u_pozadini(rucno=True), "secondary", 9).pack(fill="x", pady=(8, 0))
+        self.gumb(sidebar_dno, self.t("donate"), self.otvori_donaciju, "secondary", 9).pack(fill="x", pady=(8, 0))
 
         form_outer = tk.Frame(sidebar, bg=c["sidebar"])
         form_outer.pack(fill="both", expand=True)
@@ -1115,7 +1125,7 @@ class GarancijeApp:
             widget.destroy()
 
         self.postavi_stilove()
-        self.root.title(self.t("app_title"))
+        self.root.title(f"{self.t('app_title')} v{APP_VERSION}")
         self.kreiraj_sucelje()
 
         for k, vrijednost in spremljeni_unosi.items():
