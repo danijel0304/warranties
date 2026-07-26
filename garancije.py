@@ -19,6 +19,8 @@ import subprocess
 import sys
 import pandas as pd
 
+from self_updater import SelfUpdater
+
 # --- KONFIGURACIJA ---
 
 def odredi_baznu_mapu():
@@ -43,7 +45,7 @@ SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
 BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
 POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 GITHUB_REPO = "danijel0304/warranties"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -319,6 +321,7 @@ class GarancijeApp:
         self.skalabilni_gumbi = []
         self._zadnja_ui_skala = None
         self.update_provjera_u_tijeku = False
+        self.update_button = None
 
         self.putanja_orig_racun = tk.StringVar()
         self.putanja_prod_jamstvo = tk.StringVar()
@@ -442,20 +445,16 @@ class GarancijeApp:
         return {"tag": tag, "url": podaci.get("html_url") or GITHUB_RELEASES_URL}
 
     def provjeri_update_u_pozadini(self, rucno=False):
-        if self.update_provjera_u_tijeku:
-            if rucno:
-                messagebox.showinfo(self.t("update_in_progress_title"), self.t("update_in_progress_msg"))
-            return
-        self.update_provjera_u_tijeku = True
-
-        def posao():
-            release = self.dohvati_zadnji_github_release()
-            try:
-                self.root.after(0, lambda: self.obradi_pronadeni_update(release, rucno))
-            except (tk.TclError, RuntimeError):
-                pass
-
-        threading.Thread(target=posao, daemon=True).start()
+        SelfUpdater(
+            self.root,
+            self.t("app_title"),
+            APP_VERSION,
+            GITHUB_REPO,
+            binary_names=("Warranties.exe", "Warranties", "warranties"),
+            linux_command="warranties",
+            button_getter=lambda: self.update_button,
+            language_getter=lambda: self.jezik,
+        ).check(show_current=rucno, show_errors=rucno)
 
     def obradi_pronadeni_update(self, release, rucno=False):
         self.update_provjera_u_tijeku = False
@@ -910,7 +909,8 @@ class GarancijeApp:
         self.gumb(okvir_akcije, self.t("clear"), self.ocisti_unos, "secondary", 10).pack(side="right", fill="x", expand=True, padx=(6, 0))
         self.gumb(sidebar_dno, self.t("backup"), self.napravi_rucni_backup, "secondary", 9).pack(fill="x")
         self.gumb(sidebar_dno, self.t("restore_data"), self.ucitaj_podatke_iz_druge_mape, "secondary", 9).pack(fill="x", pady=(8, 0))
-        self.gumb(sidebar_dno, self.t("check_updates"), lambda: self.provjeri_update_u_pozadini(rucno=True), "secondary", 9).pack(fill="x", pady=(8, 0))
+        self.update_button = self.gumb(sidebar_dno, self.t("check_updates"), lambda: self.provjeri_update_u_pozadini(rucno=True), "secondary", 9)
+        self.update_button.pack(fill="x", pady=(8, 0))
         self.gumb(sidebar_dno, self.t("donate"), self.otvori_donaciju, "secondary", 9).pack(fill="x", pady=(8, 0))
 
         form_outer = tk.Frame(sidebar, bg=c["sidebar"])
