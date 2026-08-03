@@ -40,7 +40,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Build application
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name Warranties garancije.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --icon assets/warranties.ico --name Warranties garancije.py
 
       - name: Build Linux packages
         if: runner.os == 'Linux'
@@ -54,8 +54,9 @@ jobs:
 
           tar -czf packages/Warranties-linux-x86_64.tar.gz -C dist Warranties
 
-          mkdir -p package/DEBIAN package/usr/bin package/usr/share/applications
+          mkdir -p package/DEBIAN package/usr/bin package/usr/share/applications package/usr/share/icons/hicolor/scalable/apps
           cp dist/Warranties package/usr/bin/warranties
+          cp assets/warranties.svg package/usr/share/icons/hicolor/scalable/apps/warranties.svg
           chmod +x package/usr/bin/warranties
 
           cat > package/DEBIAN/control <<EOF
@@ -76,6 +77,7 @@ jobs:
           Exec=warranties
           Terminal=false
           Type=Application
+          Icon=warranties
           Categories=Office;Utility;
           EOF
           sed -i 's/^          //' package/usr/share/applications/warranties.desktop
@@ -99,6 +101,9 @@ jobs:
           sed -i 's/^          //' AppDir/AppRun
           chmod +x AppDir/AppRun
 
+          cp assets/warranties.svg AppDir/warranties.svg
+          cp assets/warranties.svg AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg
+
           cat > AppDir/warranties.desktop <<'EOF'
           [Desktop Entry]
           Name=Warranties
@@ -109,12 +114,6 @@ jobs:
           Categories=Office;Utility;
           EOF
           sed -i 's/^          //' AppDir/warranties.desktop
-
-          cat > AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg <<'EOF'
-          <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#7c2d12"/><path fill="#fff" d="M76 56h104v144H76z"/><path fill="#7c2d12" d="M96 84h64v14H96zm0 30h64v14H96zm0 30h42v14H96z"/></svg>
-          EOF
-          sed -i 's/^          //' AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg
-          cp AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg AppDir/warranties.svg
 
           wget -O appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool.AppImage
