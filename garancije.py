@@ -17,6 +17,7 @@ import uuid
 import platform
 import subprocess
 import sys
+from pathlib import Path
 import pandas as pd
 
 from self_updater import SelfUpdater
@@ -50,6 +51,42 @@ GITHUB_REPO = "danijel0304/warranties"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 PAYPAL_DONATE_URL = "https://www.paypal.com/paypalme/danijel0304"
+
+
+def set_window_icon(window: tk.Tk) -> None:
+    source_dir = Path(__file__).resolve().parent
+    assets_dir = Path(getattr(sys, "_MEIPASS", source_dir)) / "assets"
+    try:
+        image = tk.PhotoImage(file=str(assets_dir / "warranties.png"))
+        window.iconphoto(True, image)
+        window._window_icon_image = image
+    except tk.TclError:
+        pass
+    if os.name == "nt":
+        try:
+            window.iconbitmap(default=str(assets_dir / "warranties.ico"))
+        except tk.TclError:
+            pass
+
+
+class StartupSplash(tk.Tk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.configure(bg="#101827")
+        self.overrideredirect(True)
+        set_window_icon(self)
+        card = tk.Frame(self, bg="#162033", highlightbackground="#31415b", highlightthickness=1)
+        card.pack(fill=tk.BOTH, expand=True)
+        assets_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
+        image = tk.PhotoImage(file=str(assets_dir / "warranties.png"))
+        self._image = image.subsample(2, 2)
+        tk.Label(card, image=self._image, bg="#162033").pack(padx=28, pady=(24, 8))
+        tk.Label(card, text="Garancije", bg="#162033", fg="#f8fafc", font=("Segoe UI", 18, "bold")).pack()
+        tk.Label(card, text="Pokrećem aplikaciju…", bg="#162033", fg="#b5c3d7", font=("Segoe UI", 10)).pack(pady=(6, 22))
+        self.update_idletasks()
+        width, height = self.winfo_reqwidth(), self.winfo_reqheight()
+        self.geometry(f"{width}x{height}+{(self.winfo_screenwidth() - width) // 2}+{(self.winfo_screenheight() - height) // 2}")
+        self.after(3000, self.destroy)
 
 STUPCI = ["ID", "Trgovina", "Broj Računa", "Naziv Proizvoda", "Šifra", "Cijena (€)", "Datum Kupovine", "Trajanje Garancije (god)", "Datum Isteka Garancije", "Originalni Račun", "Produljeno Jamstvo"]
 DB_STUPCI = [
@@ -1871,6 +1908,9 @@ class GarancijeApp:
         self.osvjezi_tablicu_i_statistiku()
 
 if __name__ == "__main__":
+    splash = StartupSplash()
+    splash.mainloop()
     root = tk.Tk()
+    set_window_icon(root)
     app = GarancijeApp(root)
     root.mainloop()
