@@ -54,9 +54,9 @@ jobs:
 
           tar -czf packages/Warranties-linux-x86_64.tar.gz -C dist Warranties
 
-          mkdir -p package/DEBIAN package/usr/bin package/usr/share/applications package/usr/share/icons/hicolor/scalable/apps
+          mkdir -p package/DEBIAN package/usr/bin package/usr/share/applications package/usr/share/icons/hicolor/512x512/apps
           cp dist/Warranties package/usr/bin/warranties
-          cp assets/warranties.svg package/usr/share/icons/hicolor/scalable/apps/warranties.svg
+          cp assets/warranties.png package/usr/share/icons/hicolor/512x512/apps/warranties.png
           chmod +x package/usr/bin/warranties
 
           cat > package/DEBIAN/control <<EOF
@@ -89,7 +89,7 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps packages
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/512x512/apps packages
           cp dist/Warranties AppDir/usr/bin/warranties
           chmod +x AppDir/usr/bin/warranties
 
@@ -101,8 +101,8 @@ jobs:
           sed -i 's/^          //' AppDir/AppRun
           chmod +x AppDir/AppRun
 
-          cp assets/warranties.svg AppDir/warranties.svg
-          cp assets/warranties.svg AppDir/usr/share/icons/hicolor/scalable/apps/warranties.svg
+          cp assets/warranties.png AppDir/warranties.png
+          cp assets/warranties.png AppDir/usr/share/icons/hicolor/512x512/apps/warranties.png
 
           cat > AppDir/warranties.desktop <<'EOF'
           [Desktop Entry]
