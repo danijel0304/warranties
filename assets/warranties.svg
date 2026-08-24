@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Warranties">
+  <defs><linearGradient id="a" x1="30" y1="18" x2="226" y2="238" gradientUnits="userSpaceOnUse"><stop stop-color="#4ee2c3"/><stop offset=".5" stop-color="#1792c9"/><stop offset="1" stop-color="#164282"/></linearGradient></defs>
+  <rect width="256" height="256" rx="58" fill="url(#a)"/><path d="M128 38c24 19 51 20 69 20v58c0 45-28 76-69 96-41-20-69-51-69-96V58c18 0 45-1 69-20Z" fill="#effff8"/>
+  <path d="M92 91h72M92 119h72M92 147h40" stroke="#1673a9" stroke-width="12" stroke-linecap="round"/><circle cx="166" cy="159" r="25" fill="#ffb547"/><path d="m154 159 8 8 17-20" fill="none" stroke="#123a68" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

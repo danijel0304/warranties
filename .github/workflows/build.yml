@@ -1,0 +1,175 @@
+name: Build Windows and Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Linux OCR dependency
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr fuse libfuse2 wget rpm
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+          python -m pip install -r requirements.txt
+
+      - name: Build application
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --icon assets/warranties.ico --name Warranties garancije.py
+
+      - name: Build Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          mkdir -p packages
+          case "$GITHUB_REF_NAME" in
+            v*) VERSION="${GITHUB_REF_NAME#v}" ;;
+            *) VERSION="0.0.0-${GITHUB_RUN_NUMBER}" ;;
+          esac
+
+          tar -czf packages/Warranties-linux-x86_64.tar.gz -C dist Warranties
+
+          mkdir -p package/DEBIAN package/usr/bin package/usr/share/applications package/usr/share/icons/hicolor/512x512/apps
+          cp dist/Warranties package/usr/bin/warranties
+          cp assets/warranties.png package/usr/share/icons/hicolor/512x512/apps/warranties.png
+          chmod +x package/usr/bin/warranties
+
+          cat > package/DEBIAN/control <<EOF
+          Package: warranties
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Danijel
+          Depends: tesseract-ocr
+          Description: Desktop warranty tracking tool
+          EOF
+          sed -i 's/^          //' package/DEBIAN/control
+
+          cat > package/usr/share/applications/warranties.desktop <<EOF
+          [Desktop Entry]
+          Name=Warranties
+          Exec=warranties
+          Terminal=false
+          Type=Application
+          Icon=warranties
+          Categories=Office;Utility;
+          EOF
+          sed -i 's/^          //' package/usr/share/applications/warranties.desktop
+
+          dpkg-deb --build package packages/warranties_${VERSION}_amd64.deb
+
+          RPM_VERSION="${VERSION//-/.}"
+          mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          cat > rpmbuild/SPECS/warranties.spec <<EOF
+          Name: warranties
+          Version: ${RPM_VERSION}
+          Release: 1%{?dist}
+          Summary: Desktop warranty tracking tool
+          License: MIT
+          BuildArch: x86_64
+          Requires: tesseract-ocr
+
+          %description
+          Desktop application for tracking warranties.
+
+          %install
+          install -Dm755 dist/Warranties %{buildroot}%{_bindir}/warranties
+          install -Dm644 assets/warranties.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/warranties.png
+          install -Dm644 package/usr/share/applications/warranties.desktop %{buildroot}%{_datadir}/applications/warranties.desktop
+
+          %files
+          %{_bindir}/warranties
+          %{_datadir}/icons/hicolor/512x512/apps/warranties.png
+          %{_datadir}/applications/warranties.desktop
+          EOF
+          sed -i 's/^          //' rpmbuild/SPECS/warranties.spec
+          rpmbuild -bb --define "_topdir $PWD/rpmbuild" rpmbuild/SPECS/warranties.spec
+          cp rpmbuild/RPMS/x86_64/*.rpm packages/
+
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          set -e
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/512x512/apps packages
+          cp dist/Warranties AppDir/usr/bin/warranties
+          chmod +x AppDir/usr/bin/warranties
+
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/warranties" "$@"
+          EOF
+          sed -i 's/^          //' AppDir/AppRun
+          chmod +x AppDir/AppRun
+
+          cp assets/warranties.png AppDir/warranties.png
+          cp assets/warranties.png AppDir/usr/share/icons/hicolor/512x512/apps/warranties.png
+
+          cat > AppDir/warranties.desktop <<'EOF'
+          [Desktop Entry]
+          Name=Warranties
+          Exec=warranties
+          Icon=warranties
+          Terminal=false
+          Type=Application
+          Categories=Office;Utility;
+          EOF
+          sed -i 's/^          //' AppDir/warranties.desktop
+
+          wget -O appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool.AppImage AppDir packages/Warranties-x86_64.AppImage
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Warranties-${{ runner.os }}
+          path: |
+            dist/*
+            packages/*
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/**/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -1,0 +1,1968 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import calendar
+import csv
+import json
+import re
+import sqlite3
+import threading
+import urllib.error
+import urllib.request
+import webbrowser
+from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import os
+import shutil
+import uuid
+import platform
+import subprocess
+import sys
+from pathlib import Path
+import pandas as pd
+
+from self_updater import SelfUpdater
+
+# --- KONFIGURACIJA ---
+
+def odredi_baznu_mapu():
+    if not getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(__file__))
+
+    izvrsna_mapa = os.path.dirname(os.path.abspath(sys.executable))
+    if os.access(izvrsna_mapa, os.W_OK):
+        return izvrsna_mapa
+
+    dokumenti = os.path.join(os.path.expanduser("~"), "Documents")
+    if os.path.isdir(dokumenti):
+        return os.path.join(dokumenti, "Garancije")
+
+    return os.path.join(os.path.expanduser("~"), "Garancije")
+
+
+BAZNA_MAPA = odredi_baznu_mapu()
+DATABASE_DATOTEKA = os.path.join(BAZNA_MAPA, "garancije.db")
+DATOTEKA = os.path.join(BAZNA_MAPA, "moje_garancije.csv")
+SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
+DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
+BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
+POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
+APP_VERSION = "1.2.0"
+GITHUB_REPO = "danijel0304/warranties"
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
+PAYPAL_DONATE_URL = "https://www.paypal.com/paypalme/danijel0304"
+
+
+def set_window_icon(window: tk.Tk) -> None:
+    source_dir = Path(__file__).resolve().parent
+    assets_dir = Path(getattr(sys, "_MEIPASS", source_dir)) / "assets"
+    try:
+        image = tk.PhotoImage(file=str(assets_dir / "warranties.png"))
+        window.iconphoto(True, image)
+        window._window_icon_image = image
+    except tk.TclError:
+        pass
+    if os.name == "nt":
+        try:
+            window.iconbitmap(default=str(assets_dir / "warranties.ico"))
+        except tk.TclError:
+            pass
+
+
+class StartupSplash(tk.Tk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.configure(bg="#101827")
+        self.overrideredirect(True)
+        set_window_icon(self)
+        card = tk.Frame(self, bg="#162033", highlightbackground="#31415b", highlightthickness=1)
+        card.pack(fill=tk.BOTH, expand=True)
+        assets_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "assets"
+        image = tk.PhotoImage(file=str(assets_dir / "warranties.png"))
+        self._image = image.subsample(2, 2)
+        tk.Label(card, image=self._image, bg="#162033").pack(padx=28, pady=(24, 8))
+        tk.Label(card, text="Garancije", bg="#162033", fg="#f8fafc", font=("Segoe UI", 18, "bold")).pack()
+        tk.Label(card, text="Pokrećem aplikaciju…", bg="#162033", fg="#b5c3d7", font=("Segoe UI", 10)).pack(pady=(6, 22))
+        self.update_idletasks()
+        width, height = self.winfo_reqwidth(), self.winfo_reqheight()
+        self.geometry(f"{width}x{height}+{(self.winfo_screenwidth() - width) // 2}+{(self.winfo_screenheight() - height) // 2}")
+        self.after(3000, self.destroy)
+
+STUPCI = ["ID", "Trgovina", "Broj Računa", "Naziv Proizvoda", "Šifra", "Cijena (€)", "Datum Kupovine", "Trajanje Garancije (god)", "Datum Isteka Garancije", "Originalni Račun", "Produljeno Jamstvo"]
+DB_STUPCI = [
+    "id",
+    "trgovina",
+    "broj_racuna",
+    "naziv_proizvoda",
+    "sifra",
+    "cijena",
+    "datum_kupovine",
+    "trajanje_garancije",
+    "datum_isteka",
+    "originalni_racun",
+    "produljeno_jamstvo",
+]
+
+JEZICI = {"en": "English", "hr": "Hrvatski"}
+JEZICI_PO_NAZIVU = {naziv: kod for kod, naziv in JEZICI.items()}
+
+PRIJEVODI = {
+    "hr": {
+        "app_title": "Garancije",
+        "app_subtitle": "Evidencija kupnji, računa i servisa",
+        "version_label": "Verzija {version}",
+        "new_entry": "Novi unos",
+        "ocr_button": "OCR računa",
+        "choose": "Odaberi",
+        "remove": "Ukloni",
+        "add": "Dodaj",
+        "clear": "Očisti",
+        "backup": "Sigurnosna kopija",
+        "restore_data": "Učitaj podatke",
+        "check_updates": "Provjeri update",
+        "donate": "PayPal donacija",
+        "theme": "Tema",
+        "theme_dark": "Tamna",
+        "theme_light": "Svijetla",
+        "language": "Jezik",
+        "filter": "Filter",
+        "total_fmt": "Ukupno: {count}",
+        "active_fmt": "Aktivno: {count}",
+        "expired_fmt": "Isteklo: {count}",
+        "search": "Pretraži",
+        "delete_selected": "Obriši odabrano",
+        "delete_expired": "Obriši istekle",
+        "restore_deleted": "Vrati izbrisano",
+        "export_excel": "Izvezi u Excel",
+        "import_excel": "Uvezi iz Excela",
+        "menu_open_receipt": "Otvori originalni račun",
+        "menu_open_warranty": "Otvori produljeno jamstvo",
+        "menu_service_history": "Povijest servisa",
+        "menu_edit_product": "Uredi proizvod",
+        "select_receipt_image": "Odaberi sliku računa",
+        "filetype_images": "Slike",
+        "loading_title": "Učitavam",
+        "loading_ocr": "Skeniram sliku. Ovo može potrajati nekoliko sekundi.",
+        "ocr_window_title": "Očitani račun",
+        "ocr_raw_text_label": "Tekst koji je program pročitao s računa:",
+        "ocr_detected_label": "Automatski prepoznati podaci:",
+        "date": "Datum",
+        "amount": "Iznos (€)",
+        "calendar_button": "Kalendar",
+        "calendar_title": "Odaberi datum",
+        "today": "Danas",
+        "keep_ocr_data": "Zadrži ove podatke",
+        "transferred_title": "Prebačeno",
+        "transferred_msg": "Dopunite naziv proizvoda i trgovinu, zatim spremite unos.",
+        "missing_module_title": "Nedostaje modul",
+        "missing_module_msg": "Za OCR instalirajte Tesseract OCR i Python pakete iz requirements.txt.",
+        "ocr_error_title": "Greška u prepoznavanju",
+        "ocr_error_msg": "Nisam uspio pročitati sliku.\nDetalji greške: {error}",
+        "delete_title": "Brisanje",
+        "delete_expired_confirm": "Obrisati svih {count} isteklih garancija?",
+        "delete_selected_confirm": "Obrisati odabrano?",
+        "required_title": "Nedostaje podatak",
+        "required_product": "Naziv proizvoda je obavezan.",
+        "doc_missing_title": "Dokument",
+        "doc_missing": "Dokument nije priložen.",
+        "edit_title": "Uredi proizvod",
+        "save": "Spremi",
+        "service_title": "Povijest servisa",
+        "recorded_repairs": "Zabilježeni popravci",
+        "add_service": "Dodaj zapis",
+        "import_title": "Uvoz",
+        "import_success": "Uvoz završen.\nDodano/ažurirano zapisa: {records}\nDokumenata vraćeno: {docs}\nDokumenata nije pronađeno: {missing}",
+        "export_title": "Izvoz",
+        "export_success": "Uspješno izvezeno u Excel.",
+        "export_success_with_docs": "Uspješno izvezeno u Excel.\nDokumenti su kopirani u:\n{path}",
+        "filetype_excel": "Excel",
+        "filetype_excel_csv": "Excel/CSV",
+        "error_title": "Greška",
+        "backup_select_title": "Odaberi mapu za spremanje sigurnosne kopije",
+        "backup_success_title": "Uspjeh",
+        "backup_success": "Sigurnosna kopija svih podataka uspješno je spremljena u:\n{path}",
+        "backup_error": "Došlo je do greške prilikom izrade sigurnosne kopije:\n{error}",
+        "update_available_title": "Dostupna je nova verzija",
+        "update_available_msg": "Dostupna je nova verzija programa Garancije.\n\nTrenutna verzija: {current}\nNova verzija: {latest}\n\nŽelite li otvoriti stranicu za preuzimanje?",
+        "update_current_title": "Program je ažuran",
+        "update_current_msg": "Koristite najnoviju verziju programa ({current}).",
+        "update_failed_title": "Provjera nije uspjela",
+        "update_failed_msg": "Nisam uspio provjeriti postoji li nova verzija. Provjerite internet vezu i pokušajte ponovno.",
+        "update_in_progress_title": "Provjera je u tijeku",
+        "update_in_progress_msg": "Provjera nove verzije već je pokrenuta.",
+        "restore_select_title": "Odaberi mapu s podacima ili sigurnosnom kopijom",
+        "restore_confirm_title": "Učitavanje podataka",
+        "restore_confirm_msg": "Program će napraviti sigurnosnu kopiju trenutnih podataka i zatim učitati podatke iz:\n{path}\n\nTrenutni podaci u programu bit će zamijenjeni. Nastaviti?",
+        "restore_missing_title": "Podaci nisu pronađeni",
+        "restore_missing_msg": "U odabranoj mapi nisam našao garancije.db, moje_garancije.csv ili Excel/CSV datoteku s podacima.",
+        "restore_same_source_msg": "Odabrali ste trenutačnu programsku mapu. Odaberite drugu mapu ili sigurnosnu kopiju.",
+        "restore_invalid_db": "Odabrana baza ne sadrži podatke programa Garancije.",
+        "restore_success_title": "Podaci učitani",
+        "restore_success_msg": "Podaci su učitani i spremljeni u programsku mapu:\n{path}\n\nSigurnosna kopija prethodnih podataka spremljena je u:\n{backup}",
+        "restore_error": "Došlo je do greške prilikom učitavanja podataka:\n{error}",
+        "doc_receipt": "RAČUN",
+        "doc_warranty": "JAMSTVO",
+        "columns": {
+            "ID": "ID",
+            "Trgovina": "Trgovina",
+            "Broj Računa": "Broj računa",
+            "Naziv Proizvoda": "Naziv proizvoda",
+            "Šifra": "Šifra",
+            "Cijena (€)": "Cijena (€)",
+            "Datum Kupovine": "Datum kupovine",
+            "Trajanje Garancije (god)": "Trajanje garancije (god)",
+            "Datum Isteka Garancije": "Datum isteka garancije",
+            "Originalni Račun": "Originalni račun",
+            "Produljeno Jamstvo": "Produljeno jamstvo",
+        },
+    },
+    "en": {
+        "app_title": "Warranties",
+        "app_subtitle": "Purchases, receipts and service records",
+        "version_label": "Version {version}",
+        "new_entry": "New entry",
+        "ocr_button": "Receipt OCR",
+        "choose": "Choose",
+        "remove": "Remove",
+        "add": "Add",
+        "clear": "Clear",
+        "backup": "Backup",
+        "restore_data": "Load data",
+        "check_updates": "Check updates",
+        "donate": "PayPal donation",
+        "theme": "Theme",
+        "theme_dark": "Dark",
+        "theme_light": "Light",
+        "language": "Language",
+        "filter": "Filter",
+        "total_fmt": "Total: {count}",
+        "active_fmt": "Active: {count}",
+        "expired_fmt": "Expired: {count}",
+        "search": "Search",
+        "delete_selected": "Delete selected",
+        "delete_expired": "Delete expired",
+        "restore_deleted": "Restore deleted",
+        "export_excel": "Export to Excel",
+        "import_excel": "Import from Excel",
+        "menu_open_receipt": "Open original receipt",
+        "menu_open_warranty": "Open extended warranty",
+        "menu_service_history": "Service history",
+        "menu_edit_product": "Edit product",
+        "select_receipt_image": "Choose receipt image",
+        "filetype_images": "Images",
+        "loading_title": "Loading",
+        "loading_ocr": "Scanning the image. This can take a few seconds.",
+        "ocr_window_title": "Scanned receipt",
+        "ocr_raw_text_label": "Text read from the receipt:",
+        "ocr_detected_label": "Automatically detected data:",
+        "date": "Date",
+        "amount": "Amount (€)",
+        "calendar_button": "Calendar",
+        "calendar_title": "Choose date",
+        "today": "Today",
+        "keep_ocr_data": "Keep these values",
+        "transferred_title": "Transferred",
+        "transferred_msg": "Fill in the product name and store, then save the entry.",
+        "missing_module_title": "Missing module",
+        "missing_module_msg": "Install Tesseract OCR and the Python packages from requirements.txt to use OCR.",
+        "ocr_error_title": "Recognition error",
+        "ocr_error_msg": "I could not read the image.\nError details: {error}",
+        "delete_title": "Delete",
+        "delete_expired_confirm": "Delete all {count} expired warranties?",
+        "delete_selected_confirm": "Delete selected items?",
+        "required_title": "Missing field",
+        "required_product": "Product name is required.",
+        "doc_missing_title": "Document",
+        "doc_missing": "No document is attached.",
+        "edit_title": "Edit product",
+        "save": "Save",
+        "service_title": "Service history",
+        "recorded_repairs": "Recorded repairs",
+        "add_service": "Add note",
+        "import_title": "Import",
+        "import_success": "Import finished.\nAdded/updated records: {records}\nDocuments restored: {docs}\nDocuments not found: {missing}",
+        "export_title": "Export",
+        "export_success": "Successfully exported to Excel.",
+        "export_success_with_docs": "Successfully exported to Excel.\nDocuments were copied to:\n{path}",
+        "filetype_excel": "Excel",
+        "filetype_excel_csv": "Excel/CSV",
+        "error_title": "Error",
+        "backup_select_title": "Choose backup destination folder",
+        "backup_success_title": "Success",
+        "backup_success": "All data was backed up successfully to:\n{path}",
+        "backup_error": "An error occurred while creating the backup:\n{error}",
+        "update_available_title": "Update available",
+        "update_available_msg": "A new version of Warranties is available.\n\nCurrent version: {current}\nNew version: {latest}\n\nDo you want to open the download page?",
+        "update_current_title": "Up to date",
+        "update_current_msg": "You are using the latest version ({current}).",
+        "update_failed_title": "Update check failed",
+        "update_failed_msg": "I could not check for a new version. Check the internet connection and try again.",
+        "update_in_progress_title": "Check in progress",
+        "update_in_progress_msg": "The update check is already running.",
+        "restore_select_title": "Choose a data or backup folder",
+        "restore_confirm_title": "Load data",
+        "restore_confirm_msg": "The app will back up the current data and then load data from:\n{path}\n\nCurrent app data will be replaced. Continue?",
+        "restore_missing_title": "Data not found",
+        "restore_missing_msg": "I could not find garancije.db, moje_garancije.csv, or an Excel/CSV data file in the selected folder.",
+        "restore_same_source_msg": "You selected the current app data folder. Choose another folder or a backup.",
+        "restore_invalid_db": "The selected database does not contain Warranties app data.",
+        "restore_success_title": "Data loaded",
+        "restore_success_msg": "Data was loaded and saved to the app data folder:\n{path}\n\nThe previous data backup was saved to:\n{backup}",
+        "restore_error": "An error occurred while loading data:\n{error}",
+        "doc_receipt": "RECEIPT",
+        "doc_warranty": "WARRANTY",
+        "columns": {
+            "ID": "ID",
+            "Trgovina": "Store",
+            "Broj Računa": "Receipt number",
+            "Naziv Proizvoda": "Product name",
+            "Šifra": "Code",
+            "Cijena (€)": "Price (€)",
+            "Datum Kupovine": "Purchase date",
+            "Trajanje Garancije (god)": "Warranty length (years)",
+            "Datum Isteka Garancije": "Warranty expiry date",
+            "Originalni Račun": "Original receipt",
+            "Produljeno Jamstvo": "Extended warranty",
+        },
+    },
+}
+
+NAZIVI_MJESECI = {
+    "hr": ["", "Siječanj", "Veljača", "Ožujak", "Travanj", "Svibanj", "Lipanj", "Srpanj", "Kolovoz", "Rujan", "Listopad", "Studeni", "Prosinac"],
+    "en": ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+}
+DANI_U_TJEDNU = {
+    "hr": ["Pon", "Uto", "Sri", "Čet", "Pet", "Sub", "Ned"],
+    "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+}
+
+class GarancijeApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.geometry("1280x780")
+        self.root.minsize(900, 600)
+
+        self.postavke = self.ucitaj_postavke()
+        self.jezik = self.postavke.get("jezik", "en")
+        if self.jezik not in PRIJEVODI:
+            self.jezik = "en"
+        self.tema = self.postavke.get("tema")
+        if self.tema not in ("light", "dark"):
+            self.tema = "dark" if bool(self.postavke.get("dark_mode", False)) else "light"
+        self.dark_mode = self.tema == "dark"
+        self.svi_podaci = []
+        self.servisi_podaci = {}
+        self.povijest_brisanja = []
+        self.trenutni_filter = "SVI"
+        self.db = None
+        self.skalabilni_gumbi = []
+        self._zadnja_ui_skala = None
+        self.update_provjera_u_tijeku = False
+        self.update_button = None
+
+        self.putanja_orig_racun = tk.StringVar()
+        self.putanja_prod_jamstvo = tk.StringVar()
+
+        self.inicijaliziraj_sustav()
+        self.postavi_stilove()
+        self.root.title(f"{self.t('app_title')} v{APP_VERSION}")
+        self.kreiraj_sucelje()
+        self.popravi_i_ucitaj_podatke()
+        self.automatski_lokalni_backup()
+        self.root.after(1500, self.provjeri_update_u_pozadini)
+
+    def ucitaj_postavke(self):
+        if not os.path.exists(POSTAVKE_DATOTEKA):
+            return {}
+        try:
+            with open(POSTAVKE_DATOTEKA, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def spremi_postavke(self):
+        postavke = dict(self.postavke)
+        postavke.update({"jezik": self.jezik, "tema": self.tema, "dark_mode": self.dark_mode})
+        self.postavke = postavke
+        with open(POSTAVKE_DATOTEKA, 'w', encoding='utf-8') as f:
+            json.dump(postavke, f, ensure_ascii=False, indent=2)
+
+    def t(self, kljuc, **vrijednosti):
+        tekst = PRIJEVODI.get(self.jezik, PRIJEVODI["en"]).get(kljuc, PRIJEVODI["en"].get(kljuc, kljuc))
+        return tekst.format(**vrijednosti) if vrijednosti else tekst
+
+    def naziv_stupca(self, stupac):
+        return PRIJEVODI.get(self.jezik, PRIJEVODI["en"])["columns"].get(stupac, stupac)
+
+    def naziv_trenutne_teme(self):
+        return self.t("theme_dark") if self.dark_mode else self.t("theme_light")
+
+    def normaliziraj_cijenu(self, vrijednost):
+        tekst = "" if vrijednost is None else str(vrijednost).strip()
+        if not tekst:
+            return ""
+
+        ocisceno = tekst.replace("€", "").replace("EUR", "").replace("eur", "")
+        ocisceno = re.sub(r"\s+", "", ocisceno)
+        ocisceno = re.sub(r"[^0-9,.\-]", "", ocisceno)
+        if not re.search(r"\d", ocisceno):
+            return tekst
+
+        if "," in ocisceno and "." in ocisceno:
+            decimalni_separator = "," if ocisceno.rfind(",") > ocisceno.rfind(".") else "."
+            separator_tisuca = "." if decimalni_separator == "," else ","
+            broj = ocisceno.replace(separator_tisuca, "").replace(decimalni_separator, ".")
+        elif "," in ocisceno:
+            broj = self.normaliziraj_jedan_separator(ocisceno, ",")
+        elif "." in ocisceno:
+            broj = self.normaliziraj_jedan_separator(ocisceno, ".")
+        else:
+            broj = ocisceno
+
+        try:
+            iznos = Decimal(broj).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except InvalidOperation:
+            return tekst
+        return f"{iznos:.2f}".replace(".", ",")
+
+    def normaliziraj_jedan_separator(self, tekst, separator):
+        dijelovi = tekst.split(separator)
+        if len(dijelovi) == 2:
+            lijevo, desno = dijelovi
+            if len(desno) == 3 and len(lijevo) <= 3:
+                return lijevo + desno
+            return lijevo + "." + desno
+        if all(len(dio) == 3 for dio in dijelovi[1:]):
+            return "".join(dijelovi)
+        return "".join(dijelovi[:-1]) + "." + dijelovi[-1]
+
+    def decimalna_cijena(self, vrijednost):
+        cijena = self.normaliziraj_cijenu(vrijednost)
+        if not cijena:
+            return Decimal("0")
+        try:
+            return Decimal(cijena.replace(".", "").replace(",", "."))
+        except InvalidOperation:
+            return Decimal("0")
+
+    def formatiraj_cijenu_unosa(self, var):
+        var.set(self.normaliziraj_cijenu(var.get()))
+
+    def dijelovi_verzije(self, verzija):
+        tekst = str(verzija or "").strip()
+        if tekst.lower().startswith("v"):
+            tekst = tekst[1:]
+        dijelovi = [int(dio) for dio in re.findall(r"\d+", tekst)[:3]]
+        while len(dijelovi) < 3:
+            dijelovi.append(0)
+        return tuple(dijelovi)
+
+    def je_novija_verzija(self, najnovija, trenutna):
+        if not najnovija:
+            return False
+        return self.dijelovi_verzije(najnovija) > self.dijelovi_verzije(trenutna)
+
+    def dohvati_zadnji_github_release(self):
+        zahtjev = urllib.request.Request(
+            GITHUB_RELEASES_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": f"Warranties/{APP_VERSION}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(zahtjev, timeout=8) as odgovor:
+                podaci = json.loads(odgovor.read().decode("utf-8"))
+        except (OSError, TimeoutError, urllib.error.URLError, ValueError):
+            return None
+
+        tag = str(podaci.get("tag_name", "")).strip()
+        if not tag or podaci.get("draft") or podaci.get("prerelease"):
+            return None
+        return {"tag": tag, "url": podaci.get("html_url") or GITHUB_RELEASES_URL}
+
+    def provjeri_update_u_pozadini(self, rucno=False):
+        SelfUpdater(
+            self.root,
+            self.t("app_title"),
+            APP_VERSION,
+            GITHUB_REPO,
+            binary_names=("Warranties.exe", "Warranties", "warranties"),
+            linux_command="warranties",
+            button_getter=lambda: self.update_button,
+            language_getter=lambda: self.jezik,
+        ).check(show_current=rucno, show_errors=rucno)
+
+    def obradi_pronadeni_update(self, release, rucno=False):
+        self.update_provjera_u_tijeku = False
+        if not release:
+            if rucno:
+                messagebox.showwarning(self.t("update_failed_title"), self.t("update_failed_msg"))
+            return
+
+        latest_tag = release["tag"]
+        if not self.je_novija_verzija(latest_tag, APP_VERSION):
+            if rucno:
+                messagebox.showinfo(self.t("update_current_title"), self.t("update_current_msg", current=APP_VERSION))
+            return
+        if not rucno and self.postavke.get("ignorirani_update") == latest_tag:
+            return
+
+        otvori = messagebox.askyesno(
+            self.t("update_available_title"),
+            self.t("update_available_msg", current=APP_VERSION, latest=latest_tag),
+        )
+        if otvori:
+            webbrowser.open(release["url"], new=2)
+        else:
+            self.postavke["ignorirani_update"] = latest_tag
+            self.spremi_postavke()
+
+    def otvori_donaciju(self):
+        webbrowser.open(PAYPAL_DONATE_URL, new=2)
+
+    def inicijaliziraj_sustav(self):
+        for mapa in [BACKUP_MAPA, DOKUMENTI_MAPA]:
+            if not os.path.exists(mapa): os.makedirs(mapa)
+        self.inicijaliziraj_bazu()
+        self.migriraj_legacy_podatke()
+
+    def inicijaliziraj_bazu(self):
+        self.db = sqlite3.connect(DATABASE_DATOTEKA)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS garancije (
+                id TEXT PRIMARY KEY,
+                trgovina TEXT NOT NULL DEFAULT '',
+                broj_racuna TEXT NOT NULL DEFAULT '',
+                naziv_proizvoda TEXT NOT NULL DEFAULT '',
+                sifra TEXT NOT NULL DEFAULT '',
+                cijena TEXT NOT NULL DEFAULT '',
+                datum_kupovine TEXT NOT NULL DEFAULT '',
+                trajanje_garancije TEXT NOT NULL DEFAULT '',
+                datum_isteka TEXT NOT NULL DEFAULT '',
+                originalni_racun TEXT NOT NULL DEFAULT '',
+                produljeno_jamstvo TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS servisi (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                garancija_id TEXT NOT NULL,
+                datum TEXT NOT NULL DEFAULT '',
+                opis TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        self.db.commit()
+
+    def broj_redaka_u_bazi(self, tablica):
+        cur = self.db.execute(f"SELECT COUNT(*) FROM {tablica}")
+        return cur.fetchone()[0]
+
+    def dohvati_meta(self, kljuc):
+        cur = self.db.execute("SELECT value FROM meta WHERE key = ?", (kljuc,))
+        red = cur.fetchone()
+        return red[0] if red else ""
+
+    def postavi_meta(self, kljuc, vrijednost):
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (kljuc, vrijednost)
+            )
+
+    def normaliziraj_redak_podataka(self, red):
+        if len(red) == 12:
+            red = [red[0]] + red[2:]
+        elif len(red) == 10:
+            red = red[:-1] + ["", red[-1]]
+        elif len(red) < 10:
+            red = [str(uuid.uuid4())[:8]] + red[-9:]
+
+        red = list(red)
+        while len(red) < len(STUPCI):
+            red.append("")
+
+        red = ["" if vrijednost is None else str(vrijednost) for vrijednost in red[:len(STUPCI)]]
+        if not red[0]:
+            red[0] = str(uuid.uuid4())[:8]
+        red[5] = self.normaliziraj_cijenu(red[5])
+        if not red[8]:
+            red[8] = self.izracunaj_istek(red[6], red[7])
+        return red
+
+    def ucitaj_podatke_iz_csv_datoteke(self, putanja):
+        podaci = []
+        with open(putanja, mode='r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader, None)
+            for red in reader:
+                if not red or len(red) < 4:
+                    continue
+                podaci.append(self.normaliziraj_redak_podataka(red))
+        return podaci
+
+    def migriraj_legacy_podatke(self):
+        if os.path.exists(DATOTEKA) and self.dohvati_meta("legacy_csv_migrated") != "1":
+            if self.broj_redaka_u_bazi("garancije") == 0:
+                self.svi_podaci = self.ucitaj_podatke_iz_csv_datoteke(DATOTEKA)
+                self.spremi_sve_u_bazu()
+            self.postavi_meta("legacy_csv_migrated", "1")
+
+        if os.path.exists(SERVISI_DATOTEKA) and self.dohvati_meta("legacy_services_migrated") != "1":
+            if self.broj_redaka_u_bazi("servisi") == 0:
+                self.servisi_podaci = self.ucitaj_servise_iz_json_datoteke(SERVISI_DATOTEKA)
+                self.spremi_sve_servise_u_bazu()
+            self.postavi_meta("legacy_services_migrated", "1")
+
+    def automatski_lokalni_backup(self):
+        if self.svi_podaci and os.path.exists(DATABASE_DATOTEKA):
+            datum = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.napravi_backup_baze(os.path.join(BACKUP_MAPA, f"backup_{datum}.db"))
+            self.izvezi_podatke_u_csv(os.path.join(BACKUP_MAPA, f"backup_{datum}.csv"))
+
+    def napravi_backup_baze(self, putanja):
+        with sqlite3.connect(putanja) as backup_db:
+            self.db.backup(backup_db)
+
+    def popravi_i_ucitaj_podatke(self):
+        self.svi_podaci = self.ucitaj_sve_iz_baze()
+        self.servisi_podaci = self.ucitaj_servise_iz_baze()
+        if self.svi_podaci:
+            self.spremi_sve_u_bazu()
+        self.osvjezi_tablicu_i_statistiku()
+
+    def ucitaj_sve_iz_baze(self):
+        cur = self.db.execute(f"SELECT {', '.join(DB_STUPCI)} FROM garancije ORDER BY rowid")
+        return [self.normaliziraj_redak_podataka(["" if vrijednost is None else str(vrijednost) for vrijednost in red]) for red in cur.fetchall()]
+
+    def spremi_sve_u_bazu(self):
+        sada = datetime.now().isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("DELETE FROM garancije")
+            for red in self.svi_podaci:
+                red = self.normaliziraj_redak_podataka(red)
+                vrijednosti = red + [sada, sada]
+                self.db.execute(
+                    f"""
+                    INSERT OR REPLACE INTO garancije ({', '.join(DB_STUPCI)}, created_at, updated_at)
+                    VALUES ({', '.join(['?'] * (len(DB_STUPCI) + 2))})
+                    """,
+                    vrijednosti
+                )
+
+    def ucitaj_servise_iz_baze(self):
+        cur = self.db.execute("SELECT garancija_id, datum, opis FROM servisi ORDER BY id")
+        servisi = {}
+        for p_id, datum, opis in cur.fetchall():
+            servisi.setdefault(p_id, []).append({"datum": datum or "", "opis": opis or ""})
+        return servisi
+
+    def ucitaj_servise_iz_json_datoteke(self, putanja):
+        try:
+            with open(putanja, 'r', encoding='utf-8') as f:
+                podaci = json.load(f)
+            return podaci if isinstance(podaci, dict) else {}
+        except Exception:
+            return {}
+
+    def spremi_sve_servise_u_bazu(self):
+        sada = datetime.now().isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("DELETE FROM servisi")
+            for p_id, zapisi in self.servisi_podaci.items():
+                if not isinstance(zapisi, list):
+                    continue
+                for zapis in zapisi:
+                    if not isinstance(zapis, dict):
+                        continue
+                    self.db.execute(
+                        "INSERT INTO servisi (garancija_id, datum, opis, created_at) VALUES (?, ?, ?, ?)",
+                        (p_id, str(zapis.get("datum", "")), str(zapis.get("opis", "")), sada)
+                    )
+
+    def spremi_servis_u_bazu(self, p_id, zapis):
+        with self.db:
+            self.db.execute(
+                "INSERT INTO servisi (garancija_id, datum, opis, created_at) VALUES (?, ?, ?, ?)",
+                (p_id, zapis["datum"], zapis["opis"], datetime.now().isoformat(timespec="seconds"))
+            )
+
+    def postavi_stilove(self):
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        self.azuriraj_temu()
+
+    def azuriraj_temu(self):
+        if self.dark_mode:
+            self.boje = {
+                "bg": "#20231f",
+                "panel": "#282c28",
+                "panel_alt": "#303530",
+                "sidebar": "#252a25",
+                "sidebar_text": "#dce2dc",
+                "sidebar_muted": "#a6ada6",
+                "text": "#dce2dc",
+                "muted": "#aeb6ae",
+                "border": "#3c443d",
+                "entry": "#252a25",
+                "heading": "#333932",
+                "accent": "#6f967d",
+                "accent_dark": "#5d826c",
+                "secondary": "#4b554d",
+                "danger": "#9b665f",
+                "warning": "#967850",
+                "success": "#668a70",
+                "row_ok": "#26342b",
+                "row_expired": "#3a2d2b",
+                "row_ok_text": "#c9d8ce",
+                "row_expired_text": "#dbc4c0",
+            }
+        else:
+            self.boje = {
+                "bg": "#f1f3f0",
+                "panel": "#fbfbf8",
+                "panel_alt": "#e7ebe6",
+                "sidebar": "#e2e7e1",
+                "sidebar_text": "#2f3832",
+                "sidebar_muted": "#6d766f",
+                "text": "#28312b",
+                "muted": "#6d766f",
+                "border": "#d4dbd2",
+                "entry": "#fbfbf8",
+                "heading": "#e4e9e2",
+                "accent": "#6f967d",
+                "accent_dark": "#5d826c",
+                "secondary": "#7d887f",
+                "danger": "#a86a62",
+                "warning": "#9b8058",
+                "success": "#6f967d",
+                "row_ok": "#edf3ee",
+                "row_expired": "#f6ece9",
+                "row_ok_text": "#4d6d59",
+                "row_expired_text": "#865b55",
+            }
+
+        c = self.boje
+        self.bg_sidebar = c["sidebar"]
+        self.root.configure(bg=c["bg"])
+        self.style.configure("Sidebar.TFrame", background=c["sidebar"])
+        self.style.configure("Main.TFrame", background=c["bg"])
+        self.style.configure("Panel.TFrame", background=c["panel"])
+        self.style.configure("TLabel", background=c["bg"], foreground=c["text"], font=('Segoe UI', 10))
+        self.style.configure("Muted.TLabel", background=c["bg"], foreground=c["muted"], font=('Segoe UI', 9))
+        self.style.configure("Panel.TLabel", background=c["panel"], foreground=c["text"], font=('Segoe UI', 10))
+        self.style.configure("Sidebar.TLabel", background=c["sidebar"], foreground=c["sidebar_text"], font=('Segoe UI', 10))
+        self.style.configure("SidebarMuted.TLabel", background=c["sidebar"], foreground=c["sidebar_muted"], font=('Segoe UI', 9))
+        self.style.configure("TEntry", fieldbackground=c["entry"], foreground=c["text"], bordercolor=c["border"], lightcolor=c["border"], darkcolor=c["border"], padding=4)
+        self.style.configure("TCombobox", fieldbackground=c["entry"], foreground=c["text"], arrowcolor=c["text"], bordercolor=c["border"], padding=4)
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", c["entry"]), ("!disabled", c["entry"])],
+            foreground=[("readonly", c["text"]), ("!disabled", c["text"])],
+            selectbackground=[("readonly", c["entry"]), ("!disabled", c["entry"])],
+            selectforeground=[("readonly", c["text"]), ("!disabled", c["text"])],
+            arrowcolor=[("readonly", c["text"]), ("!disabled", c["text"])],
+        )
+        self.root.option_add("*TCombobox*Listbox.background", c["panel"])
+        self.root.option_add("*TCombobox*Listbox.foreground", c["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", c["accent"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.style.configure("Treeview", background=c["panel"], fieldbackground=c["panel"], foreground=c["text"], rowheight=32, borderwidth=0, font=('Segoe UI', 10))
+        self.style.configure("Treeview.Heading", background=c["heading"], foreground=c["text"], relief="flat", font=('Segoe UI', 10, 'bold'))
+        self.style.map("Treeview", background=[("selected", c["accent_dark"])], foreground=[("selected", "#ffffff")])
+
+    def gumb(self, roditelj, tekst, naredba, vrsta="secondary", font_size=10):
+        c = self.boje
+        pozadine = {
+            "primary": c["accent"],
+            "secondary": c["secondary"],
+            "danger": c["danger"],
+            "warning": c["warning"],
+            "success": c["success"],
+        }
+        bg = pozadine.get(vrsta, c["secondary"])
+        gumb = tk.Button(
+            roditelj,
+            text=tekst,
+            command=naredba,
+            bg=bg,
+            fg="#ffffff",
+            activebackground=c["accent_dark"] if vrsta == "primary" else bg,
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+            font=('Segoe UI', font_size, 'bold'),
+            padx=12,
+            pady=7,
+        )
+        gumb._base_font_size = font_size
+        gumb._base_padx = 12
+        gumb._base_pady = 7
+        self.skalabilni_gumbi.append(gumb)
+        return gumb
+
+    def labela(self, roditelj, tekst, bg=None, fg=None, font=('Segoe UI', 10), **kwargs):
+        c = self.boje
+        return tk.Label(roditelj, text=tekst, bg=bg or c["bg"], fg=fg or c["text"], font=font, **kwargs)
+
+    def kreiraj_unos_cijene(self, roditelj, var, font=('Segoe UI', 10), width=None):
+        postavke = {"textvariable": var, "font": font}
+        if width:
+            postavke["width"] = width
+        unos = ttk.Entry(roditelj, **postavke)
+        unos.bind("<FocusOut>", lambda _event, v=var: self.formatiraj_cijenu_unosa(v))
+        return unos
+
+    def kreiraj_unos_datuma(self, roditelj, var, bg=None, font=('Segoe UI', 10), width=None, readonly=True):
+        okvir = tk.Frame(roditelj, bg=bg or self.boje["bg"])
+        postavke = {"textvariable": var, "font": font}
+        if width:
+            postavke["width"] = width
+        unos = ttk.Entry(okvir, **postavke)
+        if readonly:
+            unos.config(state="readonly")
+        unos.pack(side="left", fill="x", expand=True, ipady=3)
+        unos.bind("<Button-1>", lambda _event, v=var: self.otvori_kalendar(v))
+        self.gumb(okvir, self.t("calendar_button"), lambda v=var: self.otvori_kalendar(v), "secondary", 8).pack(side="right", padx=(6, 0))
+        return okvir
+
+    def stiliziraj_prozor(self, prozor, naslov, geometrija=None):
+        prozor.title(naslov)
+        if geometrija:
+            prozor.geometry(geometrija)
+        prozor.configure(bg=self.boje["bg"])
+
+    def datum_iz_teksta(self, tekst):
+        tekst = (tekst or "").strip()
+        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(tekst, fmt)
+            except ValueError:
+                pass
+        return datetime.now()
+
+    def otvori_kalendar(self, var):
+        trenutni = self.datum_iz_teksta(var.get())
+        stanje = {"godina": trenutni.year, "mjesec": trenutni.month}
+
+        win = tk.Toplevel(self.root)
+        self.stiliziraj_prozor(win, self.t("calendar_title"), "320x330")
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        zaglavlje = tk.Frame(win, bg=self.boje["bg"])
+        zaglavlje.pack(fill="x", padx=14, pady=(14, 8))
+
+        self.gumb(zaglavlje, "<", lambda: promijeni_mjesec(-1), "secondary", 9).pack(side="left", padx=(0, 8))
+
+        naslov = self.labela(zaglavlje, "", bg=self.boje["bg"], fg=self.boje["text"], font=('Segoe UI', 12, 'bold'))
+        naslov.pack(side="left", fill="x", expand=True)
+
+        self.gumb(zaglavlje, ">", lambda: promijeni_mjesec(1), "secondary", 9).pack(side="right", padx=(8, 0))
+
+        dani_okvir = tk.Frame(win, bg=self.boje["bg"])
+        dani_okvir.pack(fill="both", expand=True, padx=14)
+
+        def odaberi(dan):
+            odabrani = datetime(stanje["godina"], stanje["mjesec"], dan)
+            var.set(odabrani.strftime("%d.%m.%Y"))
+            win.destroy()
+
+        def promijeni_mjesec(korak):
+            mjesec = stanje["mjesec"] + korak
+            godina = stanje["godina"]
+            if mjesec < 1:
+                mjesec = 12
+                godina -= 1
+            elif mjesec > 12:
+                mjesec = 1
+                godina += 1
+            stanje["mjesec"] = mjesec
+            stanje["godina"] = godina
+            nacrtaj()
+
+        def nacrtaj():
+            for widget in dani_okvir.winfo_children():
+                widget.destroy()
+
+            mjesec = stanje["mjesec"]
+            godina = stanje["godina"]
+            naslov.config(text=f"{NAZIVI_MJESECI.get(self.jezik, NAZIVI_MJESECI['en'])[mjesec]} {godina}")
+
+            for stupac, dan in enumerate(DANI_U_TJEDNU.get(self.jezik, DANI_U_TJEDNU["en"])):
+                self.labela(dani_okvir, dan, bg=self.boje["bg"], fg=self.boje["muted"], font=('Segoe UI', 9, 'bold')).grid(row=0, column=stupac, sticky="nsew", pady=(0, 4))
+                dani_okvir.grid_columnconfigure(stupac, weight=1, uniform="dan")
+
+            danas = datetime.now()
+            mjesecni_dani = calendar.Calendar(firstweekday=0).monthdayscalendar(godina, mjesec)
+            for redak, tjedan in enumerate(mjesecni_dani, 1):
+                for stupac, dan in enumerate(tjedan):
+                    if dan == 0:
+                        self.labela(dani_okvir, "", bg=self.boje["bg"]).grid(row=redak, column=stupac, sticky="nsew", padx=2, pady=2)
+                        continue
+                    vrsta = "primary" if danas.year == godina and danas.month == mjesec and danas.day == dan else "secondary"
+                    self.gumb(dani_okvir, str(dan), lambda d=dan: odaberi(d), vrsta, 9).grid(row=redak, column=stupac, sticky="nsew", padx=2, pady=2)
+
+        nacrtaj()
+
+        def odaberi_danas():
+            danas = datetime.now()
+            stanje.update({"mjesec": danas.month, "godina": danas.year})
+            var.set(danas.strftime("%d.%m.%Y"))
+            win.destroy()
+
+        self.gumb(win, self.t("today"), odaberi_danas, "primary", 9).pack(fill="x", padx=14, pady=(8, 14))
+
+    def kreiraj_sucelje(self):
+        c = self.boje
+        self.skalabilni_gumbi = []
+
+        sidebar = tk.Frame(self.root, bg=c["sidebar"], width=320)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        self.sidebar = sidebar
+
+        header = tk.Frame(sidebar, bg=c["sidebar"])
+        header.pack(fill="x", padx=20, pady=(18, 12))
+        self.labela(header, self.t("app_title"), bg=c["sidebar"], fg=c["sidebar_text"], font=('Segoe UI', 22, 'bold')).pack(anchor="w")
+        self.labela(header, self.t("version_label", version=APP_VERSION), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 9, 'bold')).pack(anchor="w", pady=(2, 0))
+        self.labela(header, self.t("app_subtitle"), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 9), wraplength=260, justify="left").pack(anchor="w", pady=(4, 0))
+
+        sidebar_dno = tk.Frame(sidebar, bg=c["sidebar"])
+        sidebar_dno.pack(side="bottom", fill="x", padx=18, pady=(8, 16))
+
+        okvir_akcije = tk.Frame(sidebar_dno, bg=c["sidebar"])
+        okvir_akcije.pack(fill="x", pady=(0, 10))
+        self.gumb(okvir_akcije, self.t("add"), self.spremi_novi, "primary", 10).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.gumb(okvir_akcije, self.t("clear"), self.ocisti_unos, "secondary", 10).pack(side="right", fill="x", expand=True, padx=(6, 0))
+        self.gumb(sidebar_dno, self.t("backup"), self.napravi_rucni_backup, "secondary", 9).pack(fill="x")
+        self.gumb(sidebar_dno, self.t("restore_data"), self.ucitaj_podatke_iz_druge_mape, "secondary", 9).pack(fill="x", pady=(8, 0))
+        self.update_button = self.gumb(sidebar_dno, self.t("check_updates"), lambda: self.provjeri_update_u_pozadini(rucno=True), "secondary", 9)
+        self.update_button.pack(fill="x", pady=(8, 0))
+        self.gumb(sidebar_dno, self.t("donate"), self.otvori_donaciju, "secondary", 9).pack(fill="x", pady=(8, 0))
+
+        form_outer = tk.Frame(sidebar, bg=c["sidebar"])
+        form_outer.pack(fill="both", expand=True)
+
+        form_canvas = tk.Canvas(form_outer, bg=c["sidebar"], bd=0, highlightthickness=0)
+        form_scroll = ttk.Scrollbar(form_outer, orient="vertical", command=form_canvas.yview)
+        form_canvas.configure(yscrollcommand=form_scroll.set)
+        form_scroll.pack(side="right", fill="y")
+        form_canvas.pack(side="left", fill="both", expand=True)
+
+        form = tk.Frame(form_canvas, bg=c["sidebar"])
+        form_window = form_canvas.create_window((0, 0), window=form, anchor="nw")
+
+        def osvjezi_sidebar_scroll(_event=None):
+            form_canvas.configure(scrollregion=form_canvas.bbox("all"))
+
+        def prilagodi_sidebar_sirinu(event):
+            form_canvas.itemconfigure(form_window, width=event.width)
+
+        def pomakni_sidebar(event):
+            if getattr(event, "num", None) == 4:
+                pomak = -1
+            elif getattr(event, "num", None) == 5:
+                pomak = 1
+            else:
+                pomak = -1 if event.delta > 0 else 1
+            form_canvas.yview_scroll(pomak, "units")
+
+        def ukljuci_kotacic(_event):
+            form_canvas.bind_all("<MouseWheel>", pomakni_sidebar)
+            form_canvas.bind_all("<Button-4>", pomakni_sidebar)
+            form_canvas.bind_all("<Button-5>", pomakni_sidebar)
+
+        def iskljuci_kotacic(_event):
+            form_canvas.unbind_all("<MouseWheel>")
+            form_canvas.unbind_all("<Button-4>")
+            form_canvas.unbind_all("<Button-5>")
+
+        form.bind("<Configure>", osvjezi_sidebar_scroll)
+        form_canvas.bind("<Configure>", prilagodi_sidebar_sirinu)
+        form_canvas.bind("<Enter>", ukljuci_kotacic)
+        form.bind("<Enter>", ukljuci_kotacic)
+        form_outer.bind("<Leave>", iskljuci_kotacic)
+
+        self.labela(form, self.t("new_entry"), bg=c["sidebar"], fg=c["sidebar_text"], font=('Segoe UI', 12, 'bold')).pack(anchor="w", padx=22, pady=(4, 10))
+        self.gumb(form, self.t("ocr_button"), self.pravi_ocr_izbornik, "secondary").pack(fill="x", padx=22, pady=(0, 14))
+
+        self.unos_vars = {}
+        for p in STUPCI[1:-2]:
+            self.labela(form, self.naziv_stupca(p), bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 8, 'bold')).pack(anchor="w", padx=22, pady=(6, 2))
+            v = tk.StringVar()
+            if p == "Cijena (€)":
+                self.kreiraj_unos_cijene(form, v, font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1, ipady=3)
+            elif p == "Datum Kupovine":
+                self.kreiraj_unos_datuma(form, v, bg=c["sidebar"], font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1)
+            elif p == "Trajanje Garancije (god)":
+                unos = ttk.Entry(form, textvariable=v, font=('Segoe UI', 10))
+                unos.pack(fill="x", padx=22, pady=1, ipady=3)
+                v.trace_add("write", lambda *_, var=v: self.azuriraj_datum_isteka_iz_godina(var))
+            else:
+                ttk.Entry(form, textvariable=v, font=('Segoe UI', 10)).pack(fill="x", padx=22, pady=1, ipady=3)
+            self.unos_vars[p] = v
+
+        for naslov, var in [(self.naziv_stupca("Originalni Račun"), self.putanja_orig_racun), (self.naziv_stupca("Produljeno Jamstvo"), self.putanja_prod_jamstvo)]:
+            self.labela(form, naslov, bg=c["sidebar"], fg=c["sidebar_muted"], font=('Segoe UI', 8, 'bold')).pack(anchor="w", padx=22, pady=(10, 2))
+            okvir = tk.Frame(form, bg=c["sidebar"])
+            okvir.pack(fill="x", padx=22)
+            ttk.Entry(okvir, textvariable=var, state="readonly", font=('Segoe UI', 9)).pack(side="left", fill="x", expand=True, ipady=3)
+            self.gumb(okvir, "X", lambda v=var: v.set(""), "secondary", 9).pack(side="right", padx=(6, 0))
+            self.gumb(okvir, self.t("choose"), lambda v=var: self.odaberi_doc(v), "secondary", 9).pack(side="right", padx=(6, 0))
+
+        main = tk.Frame(self.root, bg=c["bg"])
+        main.pack(side="right", fill="both", expand=True, padx=24, pady=22)
+        self.main_frame = main
+
+        top_bar = tk.Frame(main, bg=c["bg"])
+        top_bar.pack(fill="x", pady=(0, 8))
+
+        self.labela(top_bar, f"{self.t('filter')}:", bg=c["bg"], fg=c["muted"], font=('Segoe UI', 9, 'bold')).pack(side="left", padx=(0, 8))
+
+        self.lbl_stat_ukupno = tk.Label(top_bar, text=self.t("total_fmt", count=0), font=('Segoe UI', 10, 'bold'), bg=c["panel_alt"], fg=c["text"], padx=12, pady=7, cursor="hand2", bd=0)
+        self.lbl_stat_ukupno.pack(side="left", padx=(0, 8))
+        self.lbl_stat_ukupno.bind("<Button-1>", lambda e: self.postavi_filter("SVI"))
+
+        self.lbl_stat_aktivno = tk.Label(top_bar, text=self.t("active_fmt", count=0), font=('Segoe UI', 10, 'bold'), bg=c["panel_alt"], fg=c["text"], padx=12, pady=7, cursor="hand2", bd=0)
+        self.lbl_stat_aktivno.pack(side="left", padx=(0, 8))
+        self.lbl_stat_aktivno.bind("<Button-1>", lambda e: self.postavi_filter("AKTIVNI"))
+
+        self.lbl_stat_isteklo = tk.Label(top_bar, text=self.t("expired_fmt", count=0), font=('Segoe UI', 10, 'bold'), bg=c["panel_alt"], fg=c["text"], padx=12, pady=7, cursor="hand2", bd=0)
+        self.lbl_stat_isteklo.pack(side="left")
+        self.lbl_stat_isteklo.bind("<Button-1>", lambda e: self.postavi_filter("ISTEKLI"))
+
+        postavke_okvir = tk.Frame(top_bar, bg=c["bg"])
+        postavke_okvir.pack(side="right")
+
+        self.labela(postavke_okvir, f"{self.t('language')}:", bg=c["bg"], fg=c["muted"], font=('Segoe UI', 9, 'bold')).pack(side="left", padx=(0, 6))
+        self.var_jezik = tk.StringVar(value=JEZICI[self.jezik])
+        combo_jezik = ttk.Combobox(postavke_okvir, textvariable=self.var_jezik, values=list(JEZICI.values()), state="readonly", width=10)
+        combo_jezik.pack(side="left", padx=(0, 14), ipady=3)
+        combo_jezik.bind("<<ComboboxSelected>>", self.promijeni_jezik)
+
+        self.labela(postavke_okvir, f"{self.t('theme')}:", bg=c["bg"], fg=c["muted"], font=('Segoe UI', 9, 'bold')).pack(side="left", padx=(0, 6))
+        self.var_tema = tk.StringVar(value=self.tema)
+        tema_okvir = tk.Frame(postavke_okvir, bg=c["bg"])
+        tema_okvir.pack(side="left")
+        for vrijednost, tekst in [("light", self.t("theme_light")), ("dark", self.t("theme_dark"))]:
+            odabrano = self.tema == vrijednost
+            tk.Radiobutton(
+                tema_okvir,
+                text=tekst,
+                value=vrijednost,
+                variable=self.var_tema,
+                command=self.promijeni_temu,
+                indicatoron=False,
+                bg=c["accent"] if odabrano else c["panel_alt"],
+                fg="#ffffff" if odabrano else c["text"],
+                selectcolor=c["accent"],
+                activebackground=c["accent_dark"],
+                activeforeground="#ffffff",
+                relief="flat",
+                bd=0,
+                cursor="hand2",
+                font=('Segoe UI', 9, 'bold'),
+                padx=10,
+                pady=6,
+            ).pack(side="left", padx=(0, 5) if vrijednost == "light" else (0, 0))
+
+        search_bar = tk.Frame(main, bg=c["bg"])
+        search_bar.pack(fill="x", pady=(0, 14))
+        okvir_trazi = tk.Frame(search_bar, bg=c["bg"])
+        okvir_trazi.pack(side="right")
+        self.labela(okvir_trazi, f"{self.t('search')}:", bg=c["bg"], fg=c["muted"], font=('Segoe UI', 9, 'bold')).pack(side="left", padx=(0, 8))
+        self.var_pretraga = tk.StringVar()
+        self.var_pretraga.trace_add("write", self.primijeni_pretragu)
+        ttk.Entry(okvir_trazi, textvariable=self.var_pretraga, width=34, font=('Segoe UI', 10)).pack(side="left", ipady=5)
+
+        tab_frame = tk.Frame(main, bg=c["panel"], highlightbackground=c["border"], highlightthickness=1, bd=0)
+        tab_frame.pack(fill="both", expand=True)
+
+        scroll_y = ttk.Scrollbar(tab_frame, orient="vertical")
+        scroll_y.pack(side="right", fill="y")
+        scroll_x = ttk.Scrollbar(tab_frame, orient="horizontal")
+        scroll_x.pack(side="bottom", fill="x")
+
+        self.tree = ttk.Treeview(tab_frame, columns=STUPCI, show="headings", yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        scroll_y.config(command=self.tree.yview)
+        scroll_x.config(command=self.tree.xview)
+
+        self.osnovne_sirine_stupaca = {
+            "ID": 0,
+            "Trgovina": 130,
+            "Broj Računa": 125,
+            "Naziv Proizvoda": 190,
+            "Šifra": 95,
+            "Cijena (€)": 105,
+            "Datum Kupovine": 130,
+            "Trajanje Garancije (god)": 180,
+            "Datum Isteka Garancije": 165,
+            "Originalni Račun": 135,
+            "Produljeno Jamstvo": 155,
+        }
+        self.min_sirine_stupaca = {
+            "Trgovina": 72,
+            "Broj Računa": 72,
+            "Naziv Proizvoda": 105,
+            "Šifra": 54,
+            "Cijena (€)": 64,
+            "Datum Kupovine": 82,
+            "Trajanje Garancije (god)": 92,
+            "Datum Isteka Garancije": 92,
+            "Originalni Račun": 78,
+            "Produljeno Jamstvo": 88,
+        }
+        self._zadnja_sirina_tablice = 0
+        for s in STUPCI:
+            self.tree.heading(s, text=self.naziv_stupca(s), command=lambda _s=s: self.sortiraj(_s))
+            sirina = self.osnovne_sirine_stupaca.get(s, 120)
+            min_sirina = 0 if s == "ID" else self.min_sirine_stupaca.get(s, 60)
+            self.tree.column(s, width=sirina, minwidth=min_sirina, stretch=False, anchor="center")
+
+        self.tree.pack(fill="both", expand=True)
+        self.tree.bind("<Configure>", self.prilagodi_sirine_stupaca)
+        self.tree.bind("<Button-3>", self.prikazi_meni)
+        self.tree.bind("<Double-1>", self.dvostruki_klik_otvori)
+        self.root.after_idle(self.prilagodi_sirine_stupaca)
+
+        bot_bar = tk.Frame(main, bg=c["bg"])
+        bot_bar.pack(fill="x", pady=(14, 0))
+
+        self.gumb(bot_bar, self.t("delete_selected"), self.obrisi_proizvod, "danger").pack(side="left", padx=(0, 8))
+        self.gumb(bot_bar, self.t("delete_expired"), self.obrisi_istekle, "warning").pack(side="left", padx=(0, 8))
+        self.gumb(bot_bar, self.t("restore_deleted"), self.vrati_izbrisano, "secondary").pack(side="left")
+
+        self.gumb(bot_bar, self.t("export_excel"), self.izvezi_u_excel, "success").pack(side="right", padx=(8, 0))
+        self.gumb(bot_bar, self.t("import_excel"), self.uvezi_iz_excela, "secondary").pack(side="right")
+
+        self.menu = tk.Menu(self.root, tearoff=0)
+        self.menu.add_command(label=self.t("menu_open_receipt"), command=lambda: self.otvori_doc(9))
+        self.menu.add_command(label=self.t("menu_open_warranty"), command=lambda: self.otvori_doc(10))
+        self.menu.add_separator()
+        self.menu.add_command(label=self.t("menu_service_history"), command=self.otvori_servis)
+        self.menu.add_command(label=self.t("menu_edit_product"), command=self.uredi_proizvod)
+        self.root.bind("<Configure>", self.prilagodi_responzivnost)
+        self.root.after_idle(self.prilagodi_responzivnost)
+
+    def obnovi_sucelje(self):
+        spremljeni_unosi = {}
+        if hasattr(self, "unos_vars"):
+            spremljeni_unosi = {k: v.get() for k, v in self.unos_vars.items()}
+        spremljena_pretraga = self.var_pretraga.get() if hasattr(self, "var_pretraga") else ""
+        spremljen_orig = self.putanja_orig_racun.get()
+        spremljeno_jamstvo = self.putanja_prod_jamstvo.get()
+
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        self.postavi_stilove()
+        self.root.title(f"{self.t('app_title')} v{APP_VERSION}")
+        self.kreiraj_sucelje()
+
+        for k, vrijednost in spremljeni_unosi.items():
+            if k in self.unos_vars:
+                self.unos_vars[k].set(vrijednost)
+        self.putanja_orig_racun.set(spremljen_orig)
+        self.putanja_prod_jamstvo.set(spremljeno_jamstvo)
+        self.var_pretraga.set(spremljena_pretraga)
+        self.osvjezi_tablicu_i_statistiku()
+
+    def promijeni_jezik(self, _event=None):
+        novi_jezik = JEZICI_PO_NAZIVU.get(self.var_jezik.get(), self.jezik)
+        if novi_jezik == self.jezik:
+            return
+        self.jezik = novi_jezik
+        self.spremi_postavke()
+        self.obnovi_sucelje()
+
+    def promijeni_temu(self, _event=None):
+        nova_tema = self.var_tema.get()
+        if nova_tema not in ("light", "dark") or nova_tema == self.tema:
+            return
+        self.tema = nova_tema
+        self.dark_mode = self.tema == "dark"
+        self.spremi_postavke()
+        self.obnovi_sucelje()
+
+    def prilagodi_sirine_stupaca(self, event=None):
+        if not hasattr(self, "tree") or not hasattr(self, "osnovne_sirine_stupaca"):
+            return
+
+        dostupno = event.width if event else self.tree.winfo_width()
+        dostupno = max(240, dostupno - 4)
+        if abs(dostupno - self._zadnja_sirina_tablice) < 3:
+            return
+        self._zadnja_sirina_tablice = dostupno
+
+        vidljivi_stupci = [s for s in STUPCI if s != "ID"]
+        osnovno_ukupno = sum(self.osnovne_sirine_stupaca[s] for s in vidljivi_stupci)
+        min_ukupno = sum(self.min_sirine_stupaca[s] for s in vidljivi_stupci)
+
+        if dostupno >= osnovno_ukupno:
+            faktor = dostupno / osnovno_ukupno
+            sirine = {s: int(self.osnovne_sirine_stupaca[s] * faktor) for s in vidljivi_stupci}
+        elif dostupno >= min_ukupno:
+            dodatno = dostupno - min_ukupno
+            fleksibilno = sum(self.osnovne_sirine_stupaca[s] - self.min_sirine_stupaca[s] for s in vidljivi_stupci)
+            sirine = {}
+            for s in vidljivi_stupci:
+                udio = (self.osnovne_sirine_stupaca[s] - self.min_sirine_stupaca[s]) / fleksibilno
+                sirine[s] = int(self.min_sirine_stupaca[s] + dodatno * udio)
+        else:
+            faktor = dostupno / min_ukupno
+            sirine = {s: max(32, int(self.min_sirine_stupaca[s] * faktor)) for s in vidljivi_stupci}
+
+        razlika = dostupno - sum(sirine.values())
+        if razlika:
+            sirine["Naziv Proizvoda"] = max(32, sirine["Naziv Proizvoda"] + razlika)
+
+        self.tree.column("ID", width=0, minwidth=0, stretch=False)
+        for s in vidljivi_stupci:
+            sirina = max(32, sirine[s])
+            min_sirina = min(self.min_sirine_stupaca.get(s, 60), sirina)
+            self.tree.column(s, width=sirina, minwidth=min_sirina, stretch=False)
+
+    def prilagodi_responzivnost(self, event=None):
+        if event and event.widget is not self.root:
+            return
+        if not hasattr(self, "sidebar") or not hasattr(self, "main_frame"):
+            return
+
+        sirina = event.width if event else self.root.winfo_width()
+        visina = event.height if event else self.root.winfo_height()
+        skala = max(0.78, min(1.0, sirina / 1280, visina / 760))
+        sidebar_sirina = 270 if sirina < 1050 else 300 if sirina < 1250 else 320
+        main_padx = 12 if sirina < 1050 else 18 if sirina < 1250 else 24
+        main_pady = 10 if visina < 680 else 16 if visina < 760 else 22
+
+        if self._zadnja_ui_skala == (skala, sidebar_sirina, main_padx, main_pady):
+            return
+        self._zadnja_ui_skala = (skala, sidebar_sirina, main_padx, main_pady)
+
+        self.sidebar.configure(width=sidebar_sirina)
+        self.main_frame.pack_configure(padx=main_padx, pady=main_pady)
+
+        for gumb in list(self.skalabilni_gumbi):
+            if not gumb.winfo_exists():
+                continue
+            font_size = max(8, int(gumb._base_font_size * skala))
+            gumb.config(
+                font=('Segoe UI', font_size, 'bold'),
+                padx=max(6, int(gumb._base_padx * skala)),
+                pady=max(4, int(gumb._base_pady * skala)),
+            )
+
+        if hasattr(self, "style"):
+            font_size = max(8, int(10 * skala))
+            self.style.configure("Treeview", rowheight=max(24, int(32 * skala)), font=('Segoe UI', font_size))
+            self.style.configure("Treeview.Heading", font=('Segoe UI', font_size, 'bold'))
+
+        self.prilagodi_sirine_stupaca()
+
+    # --- FUNKCIJA OČISTI UNOS ---
+
+    def ocisti_unos(self):
+        for var in self.unos_vars.values(): var.set("")
+        self.putanja_orig_racun.set("")
+        self.putanja_prod_jamstvo.set("")
+
+    # --- PRAVI OCR LOGIKA ---
+
+    def pravi_ocr_izbornik(self):
+        putanja = filedialog.askopenfilename(title=self.t("select_receipt_image"), filetypes=[(self.t("filetype_images"), "*.png *.jpg *.jpeg *.bmp")])
+        if not putanja: return
+
+        try:
+            import pytesseract
+            from PIL import Image
+
+            slika = Image.open(putanja)
+            messagebox.showinfo(self.t("loading_title"), self.t("loading_ocr"))
+
+            očitani_tekst = pytesseract.image_to_string(slika)
+
+            datum_match = re.search(r'\d{2}[./]\d{2}[./]\d{4}', očitani_tekst)
+            prepoznat_datum = datum_match.group(0).replace('/', '.') if datum_match else ""
+
+            cijene = re.findall(r'\d+[,.]\d{2}', očitani_tekst)
+            prepoznata_cijena = self.normaliziraj_cijenu(cijene[-1]) if cijene else ""
+
+            win = tk.Toplevel(self.root)
+            self.stiliziraj_prozor(win, self.t("ocr_window_title"), "640x650")
+
+            self.labela(win, self.t("ocr_raw_text_label"), bg=self.boje["bg"], fg=self.boje["text"], font=('Segoe UI', 10, 'bold')).pack(anchor="w", padx=20, pady=(16, 6))
+
+            txt_okvir = tk.Text(win, height=15, bg=self.boje["panel"], fg=self.boje["text"], insertbackground=self.boje["text"], relief="flat", bd=1, highlightbackground=self.boje["border"], highlightthickness=1)
+            txt_okvir.pack(fill="both", expand=True, padx=20)
+            txt_okvir.insert("1.0", očitani_tekst)
+
+            self.labela(win, self.t("ocr_detected_label"), bg=self.boje["bg"], fg=self.boje["text"], font=('Segoe UI', 10, 'bold')).pack(anchor="w", padx=20, pady=(14, 8))
+
+            okvir_podataka = tk.Frame(win, bg=self.boje["bg"])
+            okvir_podataka.pack(fill="x", padx=20)
+
+            self.labela(okvir_podataka, f"{self.t('date')}:", bg=self.boje["bg"]).pack(side="left")
+            datum_var = tk.StringVar(value=prepoznat_datum)
+            self.kreiraj_unos_datuma(okvir_podataka, datum_var, bg=self.boje["bg"], width=12).pack(side="left", padx=10)
+
+            self.labela(okvir_podataka, f"{self.t('amount')}:", bg=self.boje["bg"]).pack(side="left", padx=(15, 0))
+            cijena_var = tk.StringVar(value=prepoznata_cijena)
+            unos_cijena = self.kreiraj_unos_cijene(okvir_podataka, cijena_var, width=15)
+            unos_cijena.pack(side="left", padx=10)
+
+            def prebaci_podatke():
+                self.unos_vars["Datum Kupovine"].set(datum_var.get())
+                self.unos_vars["Cijena (€)"].set(self.normaliziraj_cijenu(cijena_var.get()))
+                self.putanja_orig_racun.set(putanja)
+                win.destroy()
+                messagebox.showinfo(self.t("transferred_title"), self.t("transferred_msg"))
+
+            self.gumb(win, self.t("keep_ocr_data"), prebaci_podatke, "primary").pack(pady=20)
+
+        except ImportError:
+            messagebox.showerror(self.t("missing_module_title"), self.t("missing_module_msg"))
+        except Exception as e:
+            messagebox.showerror(self.t("ocr_error_title"), self.t("ocr_error_msg", error=e))
+
+    # --- OSTATAK LOGIKE ---
+
+    def postavi_filter(self, tip):
+        self.trenutni_filter = tip
+        self.osvjezi_tablicu_i_statistiku()
+
+    def primijeni_pretragu(self, *args):
+        self.osvjezi_tablicu_i_statistiku()
+
+    def obrisi_istekle(self):
+        istekli = [r for r in self.svi_podaci if self.je_li_isteklo(r[8])]
+        if not istekli: return
+
+        if messagebox.askyesno(self.t("delete_title"), self.t("delete_expired_confirm", count=len(istekli))):
+            self.povijest_brisanja.append(istekli)
+            self.svi_podaci = [r for r in self.svi_podaci if not self.je_li_isteklo(r[8])]
+            self.spremi_sve_u_bazu()
+            self.osvjezi_tablicu_i_statistiku()
+
+    def odaberi_doc(self, var):
+        p = filedialog.askopenfilename()
+        if p: var.set(p)
+
+    def spremi_novi(self):
+        v = {k: var.get().strip() for k, var in self.unos_vars.items()}
+        if not v["Naziv Proizvoda"]:
+            messagebox.showwarning(self.t("required_title"), self.t("required_product"))
+            return
+
+        v["Cijena (€)"] = self.normaliziraj_cijenu(v["Cijena (€)"])
+        self.unos_vars["Cijena (€)"].set(v["Cijena (€)"])
+
+        p_id = str(uuid.uuid4())[:8]
+        istek = self.izracunaj_istek(v["Datum Kupovine"], v["Trajanje Garancije (god)"])
+        final_orig = self.kopiraj_datoteku(self.putanja_orig_racun.get(), f"Racun_{p_id}")
+        final_prod = self.kopiraj_datoteku(self.putanja_prod_jamstvo.get(), f"Jamstvo_{p_id}")
+
+        novi = [p_id, v["Trgovina"], v["Broj Računa"], v["Naziv Proizvoda"], v["Šifra"],
+                v["Cijena (€)"], v["Datum Kupovine"], v["Trajanje Garancije (god)"], istek, final_orig, final_prod]
+
+        self.svi_podaci.append(novi)
+        self.spremi_sve_u_bazu()
+        self.osvjezi_tablicu_i_statistiku()
+        self.ocisti_unos()
+
+    def kopiraj_datoteku(self, putanja, prefiks):
+        if not putanja or not os.path.exists(putanja): return ""
+        nova = os.path.join(DOKUMENTI_MAPA, f"{prefiks}{os.path.splitext(putanja)[1]}")
+        shutil.copy2(putanja, nova)
+        return os.path.relpath(nova, BAZNA_MAPA)
+
+    def kopiraj_mapu_dokumenata(self, ciljna_mapa):
+        if not os.path.isdir(DOKUMENTI_MAPA):
+            return ""
+
+        cilj = os.path.join(ciljna_mapa, "dokumenti_garancija")
+        if os.path.abspath(cilj) != os.path.abspath(DOKUMENTI_MAPA):
+            shutil.copytree(DOKUMENTI_MAPA, cilj, dirs_exist_ok=True)
+        return cilj
+
+    def ocisti_import_vrijednost(self, vrijednost):
+        if vrijednost is None:
+            return ""
+        try:
+            if pd.isna(vrijednost):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        if isinstance(vrijednost, datetime):
+            return vrijednost.strftime("%d.%m.%Y")
+        if isinstance(vrijednost, float) and vrijednost.is_integer():
+            return str(int(vrijednost))
+        tekst = str(vrijednost).strip()
+        return "" if tekst.lower() in ("nan", "nat", "none") else tekst
+
+    def normaliziraj_import_putanju(self, putanja):
+        putanja = self.ocisti_import_vrijednost(putanja)
+        if not putanja:
+            return ""
+        if os.path.isabs(putanja):
+            return putanja
+        return os.path.normpath(putanja.replace("\\", os.sep).replace("/", os.sep))
+
+    def naziv_datoteke_iz_putanje(self, putanja):
+        return os.path.basename(str(putanja).replace("\\", "/"))
+
+    def kandidati_za_import_dokument(self, spremljena_putanja, mapa_uvoza):
+        putanja = self.normaliziraj_import_putanju(spremljena_putanja)
+        if not putanja:
+            return []
+
+        kandidati = []
+        if os.path.isabs(putanja):
+            kandidati.append(putanja)
+        else:
+            kandidati.extend([
+                os.path.join(mapa_uvoza, putanja),
+                os.path.join(BAZNA_MAPA, putanja),
+            ])
+
+        naziv = self.naziv_datoteke_iz_putanje(putanja)
+        if naziv:
+            kandidati.extend([
+                os.path.join(mapa_uvoza, "dokumenti_garancija", naziv),
+                os.path.join(DOKUMENTI_MAPA, naziv),
+            ])
+
+        jedinstveni = []
+        vidjeni = set()
+        for kandidat in kandidati:
+            aps = os.path.abspath(kandidat)
+            if aps not in vidjeni:
+                vidjeni.add(aps)
+                jedinstveni.append(kandidat)
+        return jedinstveni
+
+    def pronadi_import_dokument(self, spremljena_putanja, mapa_uvoza):
+        for kandidat in self.kandidati_za_import_dokument(spremljena_putanja, mapa_uvoza):
+            if os.path.isfile(kandidat):
+                return kandidat
+        return ""
+
+    def uvezi_dokument_iz_backupa(self, spremljena_putanja, mapa_uvoza, p_id, prefiks):
+        putanja = self.normaliziraj_import_putanju(spremljena_putanja)
+        if not putanja:
+            return "", False, False
+
+        izvor = self.pronadi_import_dokument(putanja, mapa_uvoza)
+        if not izvor:
+            return putanja, False, True
+
+        ekstenzija = os.path.splitext(izvor)[1] or os.path.splitext(putanja)[1]
+        odrediste = os.path.join(DOKUMENTI_MAPA, f"{prefiks}_{p_id}{ekstenzija}")
+        os.makedirs(DOKUMENTI_MAPA, exist_ok=True)
+        if os.path.abspath(izvor) != os.path.abspath(odrediste):
+            shutil.copy2(izvor, odrediste)
+        return os.path.relpath(odrediste, BAZNA_MAPA), True, False
+
+    def redak_iz_importa(self, red, mapa_uvoza):
+        vrijednosti = {stupac: self.ocisti_import_vrijednost(red.get(stupac, "")) for stupac in STUPCI}
+        p_id = vrijednosti["ID"] or str(uuid.uuid4())[:8]
+
+        racun, racun_vracen, racun_nedostaje = self.uvezi_dokument_iz_backupa(
+            vrijednosti["Originalni Račun"], mapa_uvoza, p_id, "Racun"
+        )
+        jamstvo, jamstvo_vraceno, jamstvo_nedostaje = self.uvezi_dokument_iz_backupa(
+            vrijednosti["Produljeno Jamstvo"], mapa_uvoza, p_id, "Jamstvo"
+        )
+
+        istek = vrijednosti["Datum Isteka Garancije"]
+        if not istek:
+            istek = self.izracunaj_istek(vrijednosti["Datum Kupovine"], vrijednosti["Trajanje Garancije (god)"])
+
+        novi = [
+            p_id,
+            vrijednosti["Trgovina"],
+            vrijednosti["Broj Računa"],
+            vrijednosti["Naziv Proizvoda"],
+            vrijednosti["Šifra"],
+            self.normaliziraj_cijenu(vrijednosti["Cijena (€)"]),
+            vrijednosti["Datum Kupovine"],
+            vrijednosti["Trajanje Garancije (god)"],
+            istek,
+            racun,
+            jamstvo,
+        ]
+        vraceno = int(racun_vracen) + int(jamstvo_vraceno)
+        nedostaje = int(racun_nedostaje) + int(jamstvo_nedostaje)
+        return novi, vraceno, nedostaje
+
+    def uvezi_servise_iz_backupa(self, mapa_uvoza):
+        servis_backup = os.path.join(mapa_uvoza, "servisi_log.json")
+        if not os.path.isfile(servis_backup):
+            return
+        servisni_podaci = self.ucitaj_servise_iz_json_datoteke(servis_backup)
+        if not servisni_podaci:
+            return
+        for p_id, zapisi in servisni_podaci.items():
+            if isinstance(zapisi, list):
+                self.servisi_podaci[p_id] = zapisi
+        self.spremi_sve_servise_u_bazu()
+
+    def puna_putanja_dokumenta(self, putanja):
+        if not putanja:
+            return ""
+        if os.path.isabs(putanja):
+            return putanja
+        return os.path.join(BAZNA_MAPA, putanja)
+
+    def osvjezi_tablicu_i_statistiku(self, podaci=None):
+        if podaci is None: podaci = self.svi_podaci
+        for r in self.tree.get_children(): self.tree.delete(r)
+
+        c = self.boje
+        aktivno, isteklo = 0, 0
+        upit = self.var_pretraga.get().lower()
+
+        for red in podaci:
+            status = "isteklo" if self.je_li_isteklo(red[8]) else "vrijedi"
+            if status == "vrijedi": aktivno += 1
+            else: isteklo += 1
+
+            if upit and not any(upit in str(v).lower() for v in red): continue
+            if self.trenutni_filter == "AKTIVNI" and status != "vrijedi": continue
+            if self.trenutni_filter == "ISTEKLI" and status != "isteklo": continue
+
+            prikaz = list(red)
+            prikaz[5] = self.normaliziraj_cijenu(red[5])
+            prikaz[9] = self.t("doc_receipt") if red[9] else ""
+            prikaz[10] = self.t("doc_warranty") if red[10] else ""
+            self.tree.insert("", "end", values=prikaz, tags=(status,))
+
+        self.tree.tag_configure("vrijedi", background=c["row_ok"], foreground=c["row_ok_text"])
+        self.tree.tag_configure("isteklo", background=c["row_expired"], foreground=c["row_expired_text"])
+
+        self.lbl_stat_ukupno.config(text=self.t("total_fmt", count=len(self.svi_podaci)))
+        self.lbl_stat_aktivno.config(text=self.t("active_fmt", count=aktivno))
+        self.lbl_stat_isteklo.config(text=self.t("expired_fmt", count=isteklo))
+
+        self.lbl_stat_ukupno.config(
+            bg=c["secondary"] if self.trenutni_filter == "SVI" else c["panel_alt"],
+            fg="#ffffff" if self.trenutni_filter == "SVI" else c["text"],
+        )
+        self.lbl_stat_aktivno.config(
+            bg=c["success"] if self.trenutni_filter == "AKTIVNI" else c["panel_alt"],
+            fg="#ffffff" if self.trenutni_filter == "AKTIVNI" else c["text"],
+        )
+        self.lbl_stat_isteklo.config(
+            bg=c["danger"] if self.trenutni_filter == "ISTEKLI" else c["panel_alt"],
+            fg="#ffffff" if self.trenutni_filter == "ISTEKLI" else c["text"],
+        )
+
+    def prikazi_meni(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.menu.post(event.x_root, event.y_root)
+
+    def dvostruki_klik_otvori(self, event):
+        sel = self.tree.selection()
+        if not sel: return
+        p_id = self.tree.item(sel[0], "values")[0]
+        for r in self.svi_podaci:
+            if r[0] == p_id:
+                racun = self.puna_putanja_dokumenta(r[9])
+                jamstvo = self.puna_putanja_dokumenta(r[10])
+                if racun and os.path.exists(racun): self.pokreni_datoteku(racun)
+                elif jamstvo and os.path.exists(jamstvo): self.pokreni_datoteku(jamstvo)
+                break
+
+    def otvori_doc(self, idx):
+        sel = self.tree.selection()
+        if not sel: return
+        p_id = self.tree.item(sel[0], "values")[0]
+        for r in self.svi_podaci:
+            if r[0] == p_id:
+                putanja = self.puna_putanja_dokumenta(r[idx])
+                if putanja and os.path.exists(putanja): self.pokreni_datoteku(putanja)
+                else: messagebox.showinfo(self.t("doc_missing_title"), self.t("doc_missing"))
+                break
+
+    def pokreni_datoteku(self, putanja):
+        if platform.system() == "Windows": os.startfile(putanja)
+        else: subprocess.call(["open" if platform.system() == "Darwin" else "xdg-open", putanja])
+
+    def dodaj_dokument_naknadno(self, idx):
+        sel = self.tree.selection()
+        if not sel: return
+        p = filedialog.askopenfilename()
+        if p:
+            p_id = self.tree.item(sel[0], "values")[0]
+            prefiks = "Racun_" if idx == 9 else "Jamstvo_"
+            nova = self.kopiraj_datoteku(p, f"{prefiks}{p_id}")
+            for r in self.svi_podaci:
+                if r[0] == p_id: r[idx] = nova
+            self.spremi_sve_u_bazu()
+            self.osvjezi_tablicu_i_statistiku()
+
+    def obrisi_proizvod(self):
+        sel = self.tree.selection()
+        if sel and messagebox.askyesno(self.t("delete_title"), self.t("delete_selected_confirm")):
+            za_brisanje_id = [self.tree.item(i, "values")[0] for i in sel]
+            obrisani = [r for r in self.svi_podaci if r[0] in za_brisanje_id]
+            if obrisani:
+                self.povijest_brisanja.append(obrisani)
+                self.svi_podaci = [r for r in self.svi_podaci if r[0] not in za_brisanje_id]
+                self.spremi_sve_u_bazu()
+                self.osvjezi_tablicu_i_statistiku()
+
+    def vrati_izbrisano(self):
+        if not self.povijest_brisanja: return
+        zadnje = self.povijest_brisanja.pop()
+        self.svi_podaci.extend(zadnje)
+        self.spremi_sve_u_bazu()
+        self.osvjezi_tablicu_i_statistiku()
+
+    def uredi_proizvod(self):
+        sel = self.tree.selection()
+        if not sel: return
+        p_id = self.tree.item(sel[0], "values")[0]
+        for r in self.svi_podaci:
+            if r[0] == p_id:
+                edit_win = tk.Toplevel(self.root)
+                self.stiliziraj_prozor(edit_win, self.t("edit_title"), "460x560")
+                body = tk.Frame(edit_win, bg=self.boje["bg"])
+                body.pack(fill="both", expand=True, padx=24, pady=18)
+                nove_v = {}
+                for i, s in enumerate(STUPCI[1:-2], 1):
+                    self.labela(body, self.naziv_stupca(s), bg=self.boje["bg"], fg=self.boje["muted"], font=('Segoe UI', 9, 'bold')).pack(anchor="w", pady=(8, 2))
+                    v = tk.StringVar(value=r[i])
+                    if s == "Cijena (€)":
+                        self.kreiraj_unos_cijene(body, v).pack(fill="x", ipady=4)
+                    elif s in ("Datum Kupovine", "Datum Isteka Garancije"):
+                        self.kreiraj_unos_datuma(body, v, bg=self.boje["bg"]).pack(fill="x")
+                    elif s == "Trajanje Garancije (god)":
+                        unos = ttk.Entry(body, textvariable=v)
+                        unos.pack(fill="x", ipady=4)
+                        v.trace_add("write", lambda *_, var=v, dat_kup=nove_v.get("Datum Kupovine"): self.azuriraj_datum_isteka_u_uredi(var, dat_kup, nove_v.get("Datum Isteka Garancije")))
+                    else:
+                        ttk.Entry(body, textvariable=v).pack(fill="x", ipady=4)
+                    nove_v[s] = v
+                def spasi():
+                    r[1:9] = [nove_v[s].get() for s in STUPCI[1:-2]]
+                    r[5] = self.normaliziraj_cijenu(r[5])
+                    r[8] = self.izracunaj_istek(r[6], r[7])
+                    self.spremi_sve_u_bazu()
+                    self.osvjezi_tablicu_i_statistiku()
+                    edit_win.destroy()
+                self.gumb(body, self.t("save"), spasi, "primary").pack(fill="x", pady=(18, 0))
+                break
+
+    def otvori_servis(self):
+        sel = self.tree.selection()
+        if not sel: return
+        p_id = self.tree.item(sel[0], "values")[0]
+        sw = tk.Toplevel(self.root)
+        self.stiliziraj_prozor(sw, self.t("service_title"), "480x420")
+        body = tk.Frame(sw, bg=self.boje["bg"])
+        body.pack(fill="both", expand=True, padx=20, pady=18)
+        self.labela(body, self.t("recorded_repairs"), bg=self.boje["bg"], fg=self.boje["text"], font=('Segoe UI', 11, 'bold')).pack(anchor="w", pady=(0, 8))
+        lb = tk.Listbox(body, bg=self.boje["panel"], fg=self.boje["text"], selectbackground=self.boje["accent_dark"], selectforeground="#ffffff", relief="flat", highlightbackground=self.boje["border"], highlightthickness=1)
+        lb.pack(fill="both", expand=True)
+        for s in self.servisi_podaci.get(p_id, []): lb.insert("end", f"[{s['datum']}] {s['opis']}")
+        en = ttk.Entry(body)
+        en.pack(fill="x", pady=(10, 8), ipady=4)
+        def dodaj():
+            if en.get():
+                z = {"datum": datetime.now().strftime("%d.%m.%Y"), "opis": en.get()}
+                self.servisi_podaci.setdefault(p_id, []).append(z)
+                lb.insert("end", f"[{z['datum']}] {z['opis']}")
+                self.spremi_servis_u_bazu(p_id, z)
+                en.delete(0, 'end')
+        self.gumb(body, self.t("add_service"), dodaj, "primary").pack(fill="x")
+
+    def izvezi_u_excel(self):
+        if not self.svi_podaci: return
+        putanja = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[(self.t("filetype_excel"), "*.xlsx")], initialfile="Garancije_Eksport.xlsx")
+        if putanja:
+            pd.DataFrame(self.svi_podaci, columns=STUPCI).to_excel(putanja, index=False)
+            dokumenti_backup = self.kopiraj_mapu_dokumenata(os.path.dirname(putanja))
+            if dokumenti_backup:
+                messagebox.showinfo(self.t("export_title"), self.t("export_success_with_docs", path=dokumenti_backup))
+            else:
+                messagebox.showinfo(self.t("export_title"), self.t("export_success"))
+
+    def uvezi_podatke_iz_datoteke(self, p, zamijeni=False, ocisti_dokumente=False):
+        df = pd.read_excel(p) if p.lower().endswith('.xlsx') else pd.read_csv(p)
+        mapa_uvoza = os.path.dirname(os.path.abspath(p))
+        if zamijeni:
+            self.svi_podaci = []
+            self.servisi_podaci = {}
+            with self.db:
+                self.db.execute("DELETE FROM servisi")
+            if ocisti_dokumente:
+                self.ocisti_programske_dokumente()
+
+        indeks_po_id = {r[0]: i for i, r in enumerate(self.svi_podaci) if r[0]}
+        broj_zapisa = 0
+        vraceni_dokumenti = 0
+        dokumenti_nedostaju = 0
+
+        for _, red in df.iterrows():
+            novi, vraceno, nedostaje = self.redak_iz_importa(red, mapa_uvoza)
+            if not any(novi[i] for i in [1, 2, 3, 4, 5, 6, 7, 9, 10]):
+                continue
+
+            postojeci_idx = indeks_po_id.get(novi[0])
+            if postojeci_idx is None:
+                indeks_po_id[novi[0]] = len(self.svi_podaci)
+                self.svi_podaci.append(novi)
+            else:
+                stari = self.svi_podaci[postojeci_idx]
+                if not novi[9] and stari[9]:
+                    novi[9] = stari[9]
+                if not novi[10] and stari[10]:
+                    novi[10] = stari[10]
+                self.svi_podaci[postojeci_idx] = novi
+
+            broj_zapisa += 1
+            vraceni_dokumenti += vraceno
+            dokumenti_nedostaju += nedostaje
+
+        self.uvezi_servise_iz_backupa(mapa_uvoza)
+        self.spremi_sve_u_bazu()
+        self.osvjezi_tablicu_i_statistiku()
+        return broj_zapisa, vraceni_dokumenti, dokumenti_nedostaju
+
+    def uvezi_iz_excela(self):
+        p = filedialog.askopenfilename(filetypes=[(self.t("filetype_excel_csv"), "*.xlsx *.csv")])
+        if not p: return
+        try:
+            broj_zapisa, vraceni_dokumenti, dokumenti_nedostaju = self.uvezi_podatke_iz_datoteke(p)
+            messagebox.showinfo(
+                self.t("import_title"),
+                self.t("import_success", records=broj_zapisa, docs=vraceni_dokumenti, missing=dokumenti_nedostaju)
+            )
+        except Exception as e: messagebox.showerror(self.t("error_title"), str(e))
+
+    def pronadi_podatke_za_ucitavanje(self, mapa):
+        baza = os.path.join(mapa, "garancije.db")
+        if os.path.isfile(baza):
+            return {"tip": "db", "putanja": baza}
+
+        poznate_datoteke = [
+            os.path.join(mapa, "moje_garancije.csv"),
+            os.path.join(mapa, "Garancije.xlsx"),
+            os.path.join(mapa, "Garancije_Eksport.xlsx"),
+        ]
+        for putanja in poznate_datoteke:
+            if os.path.isfile(putanja):
+                return {"tip": "tablica", "putanja": putanja}
+
+        kandidati = []
+        try:
+            for naziv in os.listdir(mapa):
+                putanja = os.path.join(mapa, naziv)
+                if os.path.isfile(putanja) and naziv.lower().endswith((".xlsx", ".csv")):
+                    kandidati.append(putanja)
+        except OSError:
+            return None
+
+        if kandidati:
+            return {"tip": "tablica", "putanja": sorted(kandidati)[0]}
+        return None
+
+    def napravi_backup_prije_ucitavanja(self):
+        datum = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_dir = os.path.join(BACKUP_MAPA, f"Prije_Ucitavanja_{datum}")
+        os.makedirs(backup_dir)
+
+        if os.path.exists(DATABASE_DATOTEKA):
+            self.napravi_backup_baze(os.path.join(backup_dir, "garancije.db"))
+        self.izvezi_podatke_u_csv(os.path.join(backup_dir, "moje_garancije.csv"))
+        self.izvezi_servise_u_json(os.path.join(backup_dir, "servisi_log.json"))
+        if os.path.exists(DOKUMENTI_MAPA):
+            self.kopiraj_mapu_dokumenata(backup_dir)
+        return backup_dir
+
+    def kopiraj_dokumente_iz_mape(self, mapa):
+        izvor = os.path.join(mapa, "dokumenti_garancija")
+        if not os.path.isdir(izvor):
+            return
+        os.makedirs(DOKUMENTI_MAPA, exist_ok=True)
+        if os.path.abspath(izvor) != os.path.abspath(DOKUMENTI_MAPA):
+            shutil.copytree(izvor, DOKUMENTI_MAPA, dirs_exist_ok=True)
+
+    def ocisti_programske_dokumente(self):
+        if os.path.isdir(DOKUMENTI_MAPA):
+            shutil.rmtree(DOKUMENTI_MAPA)
+        os.makedirs(DOKUMENTI_MAPA, exist_ok=True)
+
+    def provjeri_bazu_za_ucitavanje(self, izvor):
+        with sqlite3.connect(izvor) as provjera:
+            cur = provjera.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'garancije'")
+            if cur.fetchone() is None:
+                raise ValueError(self.t("restore_invalid_db"))
+
+    def zamijeni_bazu_iz_datoteke(self, izvor):
+        self.provjeri_bazu_za_ucitavanje(izvor)
+        privremena = DATABASE_DATOTEKA + ".restore_tmp"
+        shutil.copy2(izvor, privremena)
+        if self.db:
+            self.db.close()
+            self.db = None
+        os.replace(privremena, DATABASE_DATOTEKA)
+        self.inicijaliziraj_bazu()
+
+    def ucitaj_podatke_iz_druge_mape(self):
+        mapa = filedialog.askdirectory(title=self.t("restore_select_title"))
+        if not mapa:
+            return
+        if os.path.abspath(mapa) == os.path.abspath(BAZNA_MAPA):
+            messagebox.showinfo(self.t("restore_missing_title"), self.t("restore_same_source_msg"))
+            return
+
+        podaci = self.pronadi_podatke_za_ucitavanje(mapa)
+        if not podaci:
+            messagebox.showwarning(self.t("restore_missing_title"), self.t("restore_missing_msg"))
+            return
+
+        if not messagebox.askyesno(self.t("restore_confirm_title"), self.t("restore_confirm_msg", path=mapa)):
+            return
+
+        backup_dir = ""
+        try:
+            backup_dir = self.napravi_backup_prije_ucitavanja()
+            if podaci["tip"] == "db":
+                if os.path.abspath(podaci["putanja"]) == os.path.abspath(DATABASE_DATOTEKA):
+                    messagebox.showinfo(self.t("restore_success_title"), self.t("restore_success_msg", path=BAZNA_MAPA, backup=backup_dir))
+                    return
+                self.zamijeni_bazu_iz_datoteke(podaci["putanja"])
+                self.ocisti_programske_dokumente()
+                self.svi_podaci = self.ucitaj_sve_iz_baze()
+                self.servisi_podaci = self.ucitaj_servise_iz_baze()
+                servis_backup = os.path.join(mapa, "servisi_log.json")
+                if os.path.isfile(servis_backup) and not self.servisi_podaci:
+                    self.servisi_podaci = self.ucitaj_servise_iz_json_datoteke(servis_backup)
+                    self.spremi_sve_servise_u_bazu()
+            else:
+                self.uvezi_podatke_iz_datoteke(podaci["putanja"], zamijeni=True, ocisti_dokumente=True)
+
+            self.kopiraj_dokumente_iz_mape(mapa)
+            self.popravi_i_ucitaj_podatke()
+            messagebox.showinfo(self.t("restore_success_title"), self.t("restore_success_msg", path=BAZNA_MAPA, backup=backup_dir))
+        except Exception as e:
+            if self.db is None:
+                self.inicijaliziraj_bazu()
+            messagebox.showerror(self.t("error_title"), self.t("restore_error", error=e))
+
+    def napravi_rucni_backup(self):
+        target = filedialog.askdirectory(title=self.t("backup_select_title"))
+        if not target: return
+
+        try:
+            datum = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            backup_dir = os.path.join(target, f"Garancije_Backup_{datum}")
+            os.makedirs(backup_dir)
+
+            if os.path.exists(DATABASE_DATOTEKA):
+                self.napravi_backup_baze(os.path.join(backup_dir, "garancije.db"))
+            self.izvezi_podatke_u_csv(os.path.join(backup_dir, "moje_garancije.csv"))
+            self.izvezi_servise_u_json(os.path.join(backup_dir, "servisi_log.json"))
+            if os.path.exists(DOKUMENTI_MAPA):
+                self.kopiraj_mapu_dokumenata(backup_dir)
+
+            messagebox.showinfo(self.t("backup_success_title"), self.t("backup_success", path=backup_dir))
+        except Exception as e:
+            messagebox.showerror(self.t("error_title"), self.t("backup_error", error=e))
+
+    def izvezi_podatke_u_csv(self, putanja):
+        with open(putanja, mode='w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f); w.writerow(STUPCI); w.writerows(self.svi_podaci)
+
+    def izvezi_servise_u_json(self, putanja):
+        with open(putanja, 'w', encoding='utf-8') as f:
+            json.dump(self.servisi_podaci, f, ensure_ascii=False, indent=2)
+
+    def izracunaj_istek(self, d, t):
+        try:
+            dt = datetime.strptime(d, "%d.%m.%Y")
+            return dt.replace(year=dt.year + int(t)).strftime("%d.%m.%Y")
+        except: return "N/A"
+
+    def azuriraj_datum_isteka_iz_godina(self, var):
+        godina_tekst = var.get().strip()
+        if not godina_tekst.isdigit():
+            return
+        godina = int(godina_tekst)
+        if godina <= 0:
+            return
+        datum_kupovine = self.unos_vars.get("Datum Kupovine")
+        if not datum_kupovine:
+            return
+        datum = datum_kupovine.get().strip()
+        if not datum:
+            return
+        try:
+            dt = datetime.strptime(datum, "%d.%m.%Y")
+            istek = dt.replace(year=dt.year + godina).strftime("%d.%m.%Y")
+            istek_var = self.unos_vars.get("Datum Isteka Garancije")
+            if istek_var:
+                istek_var.set(istek)
+        except ValueError:
+            pass
+
+    def azuriraj_datum_isteka_u_uredi(self, var_godina, var_datum_kupovine, var_datum_isteka):
+        godina_tekst = var_godina.get().strip()
+        if not godina_tekst.isdigit():
+            return
+        godina = int(godina_tekst)
+        if godina <= 0:
+            return
+        if not var_datum_kupovine:
+            return
+        datum = var_datum_kupovine.get().strip()
+        if not datum:
+            return
+        try:
+            dt = datetime.strptime(datum, "%d.%m.%Y")
+            istek = dt.replace(year=dt.year + godina).strftime("%d.%m.%Y")
+            if var_datum_isteka:
+                var_datum_isteka.set(istek)
+        except ValueError:
+            pass
+
+    def je_li_isteklo(self, d):
+        try: return datetime.strptime(d, "%d.%m.%Y") < datetime.now()
+        except: return False
+
+    def prebaci_temu(self):
+        self.tema = "light" if self.dark_mode else "dark"
+        self.dark_mode = self.tema == "dark"
+        self.spremi_postavke()
+        self.obnovi_sucelje()
+
+    def sortiraj(self, col):
+        idx = STUPCI.index(col)
+        if col == "Cijena (€)":
+            self.svi_podaci.sort(key=lambda x: self.decimalna_cijena(x[idx]))
+        else:
+            self.svi_podaci.sort(key=lambda x: x[idx].lower() if isinstance(x[idx], str) else x[idx])
+        self.osvjezi_tablicu_i_statistiku()
+
+if __name__ == "__main__":
+    splash = StartupSplash()
+    splash.mainloop()
+    root = tk.Tk()
+    set_window_icon(root)
+    app = GarancijeApp(root)
+    root.mainloop()

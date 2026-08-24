@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Garancije
+Comment=Pokreni program Garancije
+Exec=/home/danijel/Desktop/Garancije/Pokreni_Garancije.sh
+Path=/home/danijel/Desktop/Garancije
+Terminal=true
+Categories=Utility;
