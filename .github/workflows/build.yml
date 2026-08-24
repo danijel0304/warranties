@@ -86,6 +86,7 @@ jobs:
 
           RPM_VERSION="${VERSION//-/.}"
           mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          PROJECT_ROOT="$PWD"
           cat > rpmbuild/SPECS/warranties.spec <<EOF
           Name: warranties
           Version: ${RPM_VERSION}
@@ -99,9 +100,9 @@ jobs:
           Desktop application for tracking warranties.
 
           %install
-          install -Dm755 dist/Warranties %{buildroot}%{_bindir}/warranties
-          install -Dm644 assets/warranties.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/warranties.png
-          install -Dm644 package/usr/share/applications/warranties.desktop %{buildroot}%{_datadir}/applications/warranties.desktop
+          install -Dm755 ${PROJECT_ROOT}/dist/Warranties %{buildroot}%{_bindir}/warranties
+          install -Dm644 ${PROJECT_ROOT}/assets/warranties.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/warranties.png
+          install -Dm644 ${PROJECT_ROOT}/package/usr/share/applications/warranties.desktop %{buildroot}%{_datadir}/applications/warranties.desktop
 
           %files
           %{_bindir}/warranties
