@@ -84,34 +84,6 @@ jobs:
 
           dpkg-deb --build package packages/warranties_${VERSION}_amd64.deb
 
-          RPM_VERSION="${VERSION//-/.}"
-          mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          cat > rpmbuild/SPECS/warranties.spec <<EOF
-          Name: warranties
-          Version: ${RPM_VERSION}
-          Release: 1%{?dist}
-          Summary: Desktop warranty tracking tool
-          License: MIT
-          BuildArch: x86_64
-          Requires: tesseract-ocr
-
-          %description
-          Desktop application for tracking warranties.
-
-          %install
-          install -Dm755 dist/Warranties %{buildroot}%{_bindir}/warranties
-          install -Dm644 assets/warranties.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/warranties.png
-          install -Dm644 package/usr/share/applications/warranties.desktop %{buildroot}%{_datadir}/applications/warranties.desktop
-
-          %files
-          %{_bindir}/warranties
-          %{_datadir}/icons/hicolor/512x512/apps/warranties.png
-          %{_datadir}/applications/warranties.desktop
-          EOF
-          sed -i 's/^          //' rpmbuild/SPECS/warranties.spec
-          rpmbuild -bb --define "_topdir $PWD/rpmbuild" rpmbuild/SPECS/warranties.spec
-          cp rpmbuild/RPMS/x86_64/*.rpm packages/
-
       - name: Build Linux AppImage
         if: runner.os == 'Linux'
         continue-on-error: true
