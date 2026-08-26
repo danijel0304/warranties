@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import tkinter.font as tkfont
 import calendar
 import csv
 import json
@@ -46,7 +47,7 @@ SERVISI_DATOTEKA = os.path.join(BAZNA_MAPA, "servisi_log.json")
 DOKUMENTI_MAPA = os.path.join(BAZNA_MAPA, "dokumenti_garancija")
 BACKUP_MAPA = os.path.join(BAZNA_MAPA, "backup")
 POSTAVKE_DATOTEKA = os.path.join(BAZNA_MAPA, "postavke.json")
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.6"
 GITHUB_REPO = "danijel0304/warranties"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -215,6 +216,19 @@ PRIJEVODI = {
             "Originalni Račun": "Originalni račun",
             "Produljeno Jamstvo": "Produljeno jamstvo",
         },
+        "table_columns": {
+            "ID": "ID",
+            "Trgovina": "Trgovina",
+            "Broj Računa": "Broj rač.",
+            "Naziv Proizvoda": "Proizvod",
+            "Šifra": "Šifra",
+            "Cijena (€)": "Cijena",
+            "Datum Kupovine": "Kupnja",
+            "Trajanje Garancije (god)": "Jamstvo",
+            "Datum Isteka Garancije": "Istek",
+            "Originalni Račun": "Račun",
+            "Produljeno Jamstvo": "Prod. jamstvo",
+        },
     },
     "en": {
         "app_title": "Warranties",
@@ -324,6 +338,19 @@ PRIJEVODI = {
             "Originalni Račun": "Original receipt",
             "Produljeno Jamstvo": "Extended warranty",
         },
+        "table_columns": {
+            "ID": "ID",
+            "Trgovina": "Store",
+            "Broj Računa": "Receipt no.",
+            "Naziv Proizvoda": "Product",
+            "Šifra": "Code",
+            "Cijena (€)": "Price",
+            "Datum Kupovine": "Purchase",
+            "Trajanje Garancije (god)": "Warranty",
+            "Datum Isteka Garancije": "Expiry",
+            "Originalni Račun": "Receipt",
+            "Produljeno Jamstvo": "Ext. warranty",
+        },
     },
 }
 
@@ -369,7 +396,6 @@ class GarancijeApp:
         self.kreiraj_sucelje()
         self.popravi_i_ucitaj_podatke()
         self.automatski_lokalni_backup()
-        self.root.after(1500, self.provjeri_update_u_pozadini)
 
     def ucitaj_postavke(self):
         if not os.path.exists(POSTAVKE_DATOTEKA):
@@ -393,6 +419,10 @@ class GarancijeApp:
 
     def naziv_stupca(self, stupac):
         return PRIJEVODI.get(self.jezik, PRIJEVODI["en"])["columns"].get(stupac, stupac)
+
+    def naziv_stupca_tablice(self, stupac):
+        prijevodi = PRIJEVODI.get(self.jezik, PRIJEVODI["en"])
+        return prijevodi.get("table_columns", prijevodi["columns"]).get(stupac, stupac)
 
     def naziv_trenutne_teme(self):
         return self.t("theme_dark") if self.dark_mode else self.t("theme_light")
@@ -1126,7 +1156,7 @@ class GarancijeApp:
         }
         self._zadnja_sirina_tablice = 0
         for s in STUPCI:
-            self.tree.heading(s, text=self.naziv_stupca(s), command=lambda _s=s: self.sortiraj(_s))
+            self.tree.heading(s, text=self.naziv_stupca_tablice(s), command=lambda _s=s: self.sortiraj(_s))
             sirina = self.osnovne_sirine_stupaca.get(s, 120)
             min_sirina = 0 if s == "ID" else self.min_sirine_stupaca.get(s, 60)
             self.tree.column(s, width=sirina, minwidth=min_sirina, stretch=False, anchor="center")
@@ -1155,6 +1185,20 @@ class GarancijeApp:
         self.menu.add_command(label=self.t("menu_edit_product"), command=self.uredi_proizvod)
         self.root.bind("<Configure>", self.prilagodi_responzivnost)
         self.root.after_idle(self.prilagodi_responzivnost)
+
+    def izracunaj_min_sirine_stupaca(self):
+        skala = self._zadnja_ui_skala[0] if self._zadnja_ui_skala else 1.0
+        font_size = max(8, int(10 * skala))
+        heading_font = tkfont.Font(family="Segoe UI", size=font_size, weight="bold")
+        min_sirine = {}
+        for stupac in STUPCI:
+            if stupac == "ID":
+                continue
+            tekst = self.naziv_stupca_tablice(stupac)
+            tekst_sirina = heading_font.measure(tekst) + 30
+            zadana_sirina = self.min_sirine_stupaca.get(stupac, 60)
+            min_sirine[stupac] = max(zadana_sirina, tekst_sirina)
+        return min_sirine
 
     def obnovi_sucelje(self):
         spremljeni_unosi = {}
@@ -1207,31 +1251,35 @@ class GarancijeApp:
         self._zadnja_sirina_tablice = dostupno
 
         vidljivi_stupci = [s for s in STUPCI if s != "ID"]
-        osnovno_ukupno = sum(self.osnovne_sirine_stupaca[s] for s in vidljivi_stupci)
-        min_ukupno = sum(self.min_sirine_stupaca[s] for s in vidljivi_stupci)
+        min_sirine = self.izracunaj_min_sirine_stupaca()
+        osnovne_sirine = {
+            s: max(self.osnovne_sirine_stupaca[s], min_sirine[s])
+            for s in vidljivi_stupci
+        }
+        osnovno_ukupno = sum(osnovne_sirine[s] for s in vidljivi_stupci)
+        min_ukupno = sum(min_sirine[s] for s in vidljivi_stupci)
 
         if dostupno >= osnovno_ukupno:
             faktor = dostupno / osnovno_ukupno
-            sirine = {s: int(self.osnovne_sirine_stupaca[s] * faktor) for s in vidljivi_stupci}
+            sirine = {s: int(osnovne_sirine[s] * faktor) for s in vidljivi_stupci}
         elif dostupno >= min_ukupno:
             dodatno = dostupno - min_ukupno
-            fleksibilno = sum(self.osnovne_sirine_stupaca[s] - self.min_sirine_stupaca[s] for s in vidljivi_stupci)
+            fleksibilno = sum(osnovne_sirine[s] - min_sirine[s] for s in vidljivi_stupci)
             sirine = {}
             for s in vidljivi_stupci:
-                udio = (self.osnovne_sirine_stupaca[s] - self.min_sirine_stupaca[s]) / fleksibilno
-                sirine[s] = int(self.min_sirine_stupaca[s] + dodatno * udio)
+                udio = (osnovne_sirine[s] - min_sirine[s]) / fleksibilno if fleksibilno else 0
+                sirine[s] = int(min_sirine[s] + dodatno * udio)
         else:
-            faktor = dostupno / min_ukupno
-            sirine = {s: max(32, int(self.min_sirine_stupaca[s] * faktor)) for s in vidljivi_stupci}
+            sirine = dict(min_sirine)
 
         razlika = dostupno - sum(sirine.values())
-        if razlika:
+        if razlika > 0:
             sirine["Naziv Proizvoda"] = max(32, sirine["Naziv Proizvoda"] + razlika)
 
         self.tree.column("ID", width=0, minwidth=0, stretch=False)
         for s in vidljivi_stupci:
-            sirina = max(32, sirine[s])
-            min_sirina = min(self.min_sirine_stupaca.get(s, 60), sirina)
+            sirina = max(32, int(sirine[s]))
+            min_sirina = min(int(min_sirine.get(s, 60)), sirina)
             self.tree.column(s, width=sirina, minwidth=min_sirina, stretch=False)
 
     def prilagodi_responzivnost(self, event=None):

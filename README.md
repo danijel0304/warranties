@@ -85,11 +85,10 @@ automatically after changing settings.
 
 ## Updates
 
-After startup, the app checks the latest GitHub release in the background. If a
-newer version is available, it asks whether to open the download page. If the
-user declines, the same release is not shown again. The **Check updates** button
-runs the same check manually and also reports when the current version is up to
-date.
+The **Check updates** button checks the latest GitHub release manually. If a
+newer version is available, it asks whether to download and install it. If the
+internet connection is unavailable, the warning appears only after a manual
+check.
 
 ## Receipt OCR Optional
 
@@ -213,11 +212,9 @@ nakon promjene postavki.
 
 ## Ažuriranja
 
-Nakon pokretanja program u pozadini provjerava zadnji GitHub release. Ako je
-dostupna novija verzija, pita korisnika želi li otvoriti stranicu za
-preuzimanje. Ako korisnik odbije, ista verzija se više ne nudi. Gumb
-**Provjeri update** pokreće istu provjeru ručno i javlja ako je trenutačna
-verzija već najnovija.
+Gumb **Provjeri update** ručno provjerava zadnji GitHub release. Ako je dostupna
+novija verzija, pita korisnika želi li je preuzeti i instalirati. Ako internetska
+veza nije dostupna, upozorenje se prikazuje samo nakon ručne provjere.
 
 ## OCR Računa Neobavezno
 
